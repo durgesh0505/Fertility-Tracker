@@ -779,10 +779,16 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logActivity }) =>
   ];
 
   const addPeriod = async () => {
-    if (!newPeriod.startDate) return;
+    if (!newPeriod.startDate) {
+      alert('Please enter a start date');
+      return;
+    }
 
     setLoading(true);
     try {
+      console.log('Adding period with data:', newPeriod);
+      console.log('Current user ID:', user?.id);
+
       const startDate = new Date(newPeriod.startDate);
       let endDate = null;
       let periodLength = user?.typical_period_length || 5;
@@ -794,23 +800,34 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logActivity }) =>
         endDate = new Date(startDate.getTime() + (periodLength * 24 * 60 * 60 * 1000));
       }
 
+      const cycleData = {
+        user_id: user.id, // Ensure we're using the correct user ID
+        start_date: newPeriod.startDate,
+        end_date: endDate.toISOString().split('T')[0],
+        period_length: periodLength,
+        cycle_length: user?.typical_cycle_length || 28,
+        flow: newPeriod.flow,
+        symptoms: newPeriod.symptoms || [],
+        notes: newPeriod.notes || ''
+      };
+
+      console.log('Inserting cycle data:', cycleData);
+
       const { data, error } = await supabase
         .from('cycles')
-        .insert([
-          {
-            start_date: newPeriod.startDate,
-            end_date: endDate.toISOString().split('T')[0],
-            period_length: periodLength,
-            cycle_length: user?.typical_cycle_length || 28,
-            flow: newPeriod.flow,
-            symptoms: newPeriod.symptoms,
-            notes: newPeriod.notes
-          }
-        ]);
+        .insert([cycleData])
+        .select(); // Add select to get back the inserted data
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
+
+      console.log('Successfully added period:', data);
+
       await fetchCycles();
       await logActivity('period_added', { start_date: newPeriod.startDate, flow: newPeriod.flow });
+      
       setNewPeriod({
         startDate: '',
         endDate: '',
@@ -818,9 +835,11 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logActivity }) =>
         symptoms: [],
         notes: ''
       });
+
+      alert('Period added successfully!');
     } catch (error) {
       console.error('Error adding period:', error);
-      alert('Error adding period. Please try again.');
+      alert(`Error adding period: ${error.message}. Please check the console for more details.`);
     } finally {
       setLoading(false);
     }
