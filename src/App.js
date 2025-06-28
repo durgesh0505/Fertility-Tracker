@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { Calendar, Heart, Baby, Upload, User, Lock, AlertCircle, TrendingUp, Clock, Target, Plus, Trash2, Download, LogOut } from 'lucide-react';
+import { Calendar, Heart, Baby, User, Lock, AlertCircle, TrendingUp, Clock, Target, Trash2, LogOut } from 'lucide-react';
 
 const App = () => {
   const [session, setSession] = useState(null);
@@ -533,7 +533,6 @@ const AdminPanel = ({ user }) => {
 const MainApp = ({ user, setUser }) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [cycles, setCycles] = useState([]);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user) {
