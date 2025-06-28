@@ -301,6 +301,7 @@ const AdminPanel = ({ user }) => {
   };
 
   const deleteUser = async (userId, username) => {
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm(`Are you sure you want to delete user "${username}"? This will delete their profile and all cycle data.`)) {
       return;
     }
