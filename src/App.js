@@ -87,32 +87,19 @@ const AuthComponent = () => {
 
     try {
       if (isSignUp) {
-        // Sign up
+        // Sign up with metadata
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              username: username || email.split('@')[0],
+              full_name: ''
+            }
+          }
         });
 
         if (error) throw error;
-
-        if (data.user) {
-          // Create user profile
-          const { error: profileError } = await supabase
-            .from('user_profiles')
-            .insert([
-              {
-                id: data.user.id,
-                username: username || email.split('@')[0],
-                full_name: '',
-                typical_cycle_length: 28,
-                cycle_length_variation: 2,
-                typical_period_length: 5,
-                period_length_variation: 1,
-              },
-            ]);
-
-          if (profileError) throw profileError;
-        }
 
         setMessage('Check your email for the confirmation link!');
       } else {
