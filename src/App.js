@@ -216,18 +216,26 @@ const AdminPanel = ({ user }) => {
 
   const fetchUsers = async () => {
     try {
+      console.log('Fetching users as admin...');
       const { data, error } = await supabase
         .rpc('get_admin_users');
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching users:', error);
+        throw error;
+      }
+
+      console.log('Fetched users:', data);
       setUsers(data || []);
     } catch (error) {
       console.error('Error fetching users:', error);
+      alert(`Error loading users: ${error.message}`);
     }
   };
 
   const fetchActivityLogs = async () => {
     try {
+      console.log('Fetching activity logs...');
       const { data, error } = await supabase
         .from('user_activity_logs')
         .select(`
@@ -237,15 +245,22 @@ const AdminPanel = ({ user }) => {
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching activity logs:', error);
+        throw error;
+      }
+
+      console.log('Fetched activity logs:', data);
       setActivityLogs(data || []);
     } catch (error) {
       console.error('Error fetching activity logs:', error);
+      // Don't show alert for activity logs, just log the error
     }
   };
 
   const fetchAdminLogs = async () => {
     try {
+      console.log('Fetching admin logs...');
       const { data, error } = await supabase
         .from('admin_logs')
         .select(`
@@ -255,10 +270,16 @@ const AdminPanel = ({ user }) => {
         .order('created_at', { ascending: false })
         .limit(50);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error fetching admin logs:', error);
+        throw error;
+      }
+
+      console.log('Fetched admin logs:', data);
       setAdminLogs(data || []);
     } catch (error) {
       console.error('Error fetching admin logs:', error);
+      // Don't show alert for admin logs, just log the error
     }
   };
 
