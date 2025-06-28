@@ -48,11 +48,18 @@ const App = () => {
 
       if (data) {
         setUser(data);
+        
+        // Check if password reset is required
+        if (data.password_reset_required) {
+          setShowPasswordChangeModal(true);
+        }
       }
     } catch (error) {
       console.error('Error:', error);
     }
   };
+
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
 
   if (loading) {
     return (
@@ -69,16 +76,193 @@ const App = () => {
     return <AuthComponent />;
   }
 
-  return <MainApp user={user} setUser={setUser} />;
+  return (
+    <>
+      <MainApp user={user} setUser={setUser} />
+      {showPasswordChangeModal && (
+        <PasswordChangeModal 
+          user={user} 
+          setUser={setUser}
+          onClose={() => setShowPasswordChangeModal(false)}
+        />
+      )}
+    </>
+  );
+};
+
+const PasswordChangeModal = ({ user, setUser, onClose }) => {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const validatePassword = (password) => {
+    const minLength = password.length >= 8;
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    
+    return {
+      minLength,
+      hasUppercase,
+      hasLowercase,
+      hasNumber,
+      hasSymbol,
+      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
+    };
+  };
+
+  const passwordValidation = validatePassword(newPassword);
+
+  const handlePasswordChange = async () => {
+    if (!passwordValidation.isValid) {
+      setMessage('Password does not meet security requirements.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Update password in Supabase Auth
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) throw error;
+
+      // Update user profile to remove password reset requirement
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .update({ 
+          password_reset_required: false,
+          password_reset_at: null
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      // Update local user state
+      setUser({ ...user, password_reset_required: false });
+      
+      alert('Password updated successfully!');
+      onClose();
+    } catch (error) {
+      setMessage(`Error updating password: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">🔐 Password Change Required</h3>
+        
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+          <p className="text-sm text-yellow-800">
+            Your administrator has reset your password. Please create a new secure password to continue.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+            />
+          </div>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <h4 className="font-medium text-gray-800 mb-2">Password Requirements:</h4>
+            <div className="space-y-1 text-sm">
+              <div className={`flex items-center space-x-2 ${passwordValidation.minLength ? 'text-green-600' : 'text-red-600'}`}>
+                <span>{passwordValidation.minLength ? '✅' : '❌'}</span>
+                <span>At least 8 characters</span>
+              </div>
+              <div className={`flex items-center space-x-2 ${passwordValidation.hasUppercase ? 'text-green-600' : 'text-red-600'}`}>
+                <span>{passwordValidation.hasUppercase ? '✅' : '❌'}</span>
+                <span>At least 1 uppercase letter (A-Z)</span>
+              </div>
+              <div className={`flex items-center space-x-2 ${passwordValidation.hasLowercase ? 'text-green-600' : 'text-red-600'}`}>
+                <span>{passwordValidation.hasLowercase ? '✅' : '❌'}</span>
+                <span>At least 1 lowercase letter (a-z)</span>
+              </div>
+              <div className={`flex items-center space-x-2 ${passwordValidation.hasNumber ? 'text-green-600' : 'text-red-600'}`}>
+                <span>{passwordValidation.hasNumber ? '✅' : '❌'}</span>
+                <span>At least 1 number (0-9)</span>
+              </div>
+              <div className={`flex items-center space-x-2 ${passwordValidation.hasSymbol ? 'text-green-600' : 'text-red-600'}`}>
+                <span>{passwordValidation.hasSymbol ? '✅' : '❌'}</span>
+                <span>At least 1 symbol (!@#$%^&*)</span>
+              </div>
+            </div>
+          </div>
+
+          {message && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-sm text-red-800">{message}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handlePasswordChange}
+            disabled={loading || !passwordValidation.isValid}
+            className="w-full bg-pink-500 text-white py-3 rounded-lg hover:bg-pink-600 transition-colors disabled:bg-gray-300"
+          >
+            {loading ? 'Updating...' : 'Update Password'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const AuthComponent = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [showPasswordRequirements, setShowPasswordRequirements] = useState(false);
+
+  const validatePassword = (password) => {
+    const minLength = password.length >= 8;
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    
+    return {
+      minLength,
+      hasUppercase,
+      hasLowercase,
+      hasNumber,
+      hasSymbol,
+      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
+    };
+  };
+
+  const passwordValidation = validatePassword(password);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -87,6 +271,21 @@ const AuthComponent = () => {
 
     try {
       if (isSignUp) {
+        // Validate password strength
+        if (!passwordValidation.isValid) {
+          setMessage('Password does not meet security requirements. Please check all requirements below.');
+          setShowPasswordRequirements(true);
+          setLoading(false);
+          return;
+        }
+
+        // Validate password confirmation
+        if (password !== confirmPassword) {
+          setMessage('Passwords do not match.');
+          setLoading(false);
+          return;
+        }
+
         // Sign up with metadata
         const { data, error } = await supabase.auth.signUp({
           email,
@@ -204,7 +403,9 @@ const AdminPanel = ({ user }) => {
   const [users, setUsers] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [tempPassword, setTempPassword] = useState('');
 
   useEffect(() => {
     if (user?.is_admin) {
@@ -213,6 +414,69 @@ const AdminPanel = ({ user }) => {
       fetchAdminLogs();
     }
   }, [user]);
+
+  const validatePassword = (password) => {
+    const minLength = password.length >= 8;
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    
+    return {
+      minLength,
+      hasUppercase,
+      hasLowercase,
+      hasNumber,
+      hasSymbol,
+      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
+    };
+  };
+
+  const resetUserPassword = async (userId, username) => {
+    try {
+      setLoading(true);
+      
+      // Call the database function to generate temp password
+      const { data, error } = await supabase
+        .rpc('admin_reset_user_password', { target_user_id: userId });
+
+      if (error) throw error;
+
+      // Update user's password in Supabase Auth
+      const { error: authError } = await supabase.auth.admin.updateUserById(
+        userId,
+        { 
+          password: data,
+          user_metadata: { password_reset_required: true }
+        }
+      );
+
+      if (authError) {
+        console.error('Auth update error:', authError);
+        // Continue anyway as the temp password was generated
+      }
+
+      // Update user profile
+      await supabase
+        .from('user_profiles')
+        .update({ 
+          password_reset_required: true,
+          password_reset_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      setTempPassword(data);
+      setSelectedUser({ id: userId, username });
+      setShowPasswordModal(true);
+
+      await fetchUsers();
+    } catch (error) {
+      console.error('Error resetting password:', error);
+      alert(`Error resetting password: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchUsers = async () => {
     try {
@@ -420,13 +684,19 @@ const AdminPanel = ({ user }) => {
                       </span>
                     </td>
                     <td className="border border-gray-300 px-3 py-2">
-                      <div className="flex space-x-2">
+                      <div className="flex space-x-1 flex-wrap">
                         <button
                           onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
                           disabled={userData.id === user.id}
                           className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300"
                         >
                           {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
+                        </button>
+                        <button
+                          onClick={() => resetUserPassword(userData.id, userData.username)}
+                          className="bg-yellow-500 text-white px-2 py-1 rounded text-xs hover:bg-yellow-600"
+                        >
+                          Reset Password
                         </button>
                         <button
                           onClick={() => deleteUser(userData.id, userData.username)}
@@ -441,6 +711,56 @@ const AdminPanel = ({ user }) => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Password Reset Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">🔐 Password Reset Successful</h3>
+            
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-yellow-800 mb-2">
+                <strong>User:</strong> {selectedUser?.username}
+              </p>
+              <p className="text-sm text-yellow-800 mb-2">
+                <strong>Temporary Password:</strong>
+              </p>
+              <div className="bg-white border rounded p-2 font-mono text-sm break-all">
+                {tempPassword}
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-red-800">
+                <strong>⚠️ Important:</strong> Share this password securely with the user. 
+                They will be required to change it on their next login.
+              </p>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(tempPassword);
+                  alert('Password copied to clipboard!');
+                }}
+                className="flex-1 bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600"
+              >
+                📋 Copy Password
+              </button>
+              <button
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setTempPassword('');
+                  setSelectedUser(null);
+                }}
+                className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
