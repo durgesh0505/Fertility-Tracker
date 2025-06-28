@@ -199,6 +199,337 @@ const AuthComponent = () => {
   );
 };
 
+const AdminPanel = ({ user }) => {
+  const [activeAdminTab, setActiveAdminTab] = useState('users');
+  const [users, setUsers] = useState([]);
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [adminLogs, setAdminLogs] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (user?.is_admin) {
+      fetchUsers();
+      fetchActivityLogs();
+      fetchAdminLogs();
+    }
+  }, [user]);
+
+  const fetchUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .rpc('get_admin_users');
+
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    }
+  };
+
+  const fetchActivityLogs = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_activity_logs')
+        .select(`
+          *,
+          user_profiles!inner(username, full_name)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      setActivityLogs(data || []);
+    } catch (error) {
+      console.error('Error fetching activity logs:', error);
+    }
+  };
+
+  const fetchAdminLogs = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('admin_logs')
+        .select(`
+          *,
+          user_profiles!admin_user_id(username, full_name)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      setAdminLogs(data || []);
+    } catch (error) {
+      console.error('Error fetching admin logs:', error);
+    }
+  };
+
+  const logAdminAction = async (action, details = {}, targetUserId = null) => {
+    try {
+      await supabase
+        .from('admin_logs')
+        .insert([{
+          action,
+          details,
+          target_user_id: targetUserId
+        }]);
+      await fetchAdminLogs();
+    } catch (error) {
+      console.error('Error logging admin action:', error);
+    }
+  };
+
+  const toggleUserAdmin = async (userId, currentStatus) => {
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({ is_admin: !currentStatus })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      await logAdminAction(
+        currentStatus ? 'admin_removed' : 'admin_granted',
+        { userId, previousStatus: currentStatus },
+        userId
+      );
+
+      await fetchUsers();
+      alert(`User ${currentStatus ? 'removed from' : 'granted'} admin privileges.`);
+    } catch (error) {
+      console.error('Error updating admin status:', error);
+      alert('Error updating admin status.');
+    }
+  };
+
+  const deleteUser = async (userId, username) => {
+    if (!confirm(`Are you sure you want to delete user "${username}"? This will delete their profile and all cycle data.`)) {
+      return;
+    }
+
+    try {
+      // Delete user profile (cycles will cascade delete)
+      const { error } = await supabase
+        .from('user_profiles')
+        .delete()
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      await logAdminAction('user_deleted', { userId, username });
+      await fetchUsers();
+      alert('User profile and data deleted successfully.');
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      alert('Error deleting user profile.');
+    }
+  };
+
+  const adminTabs = [
+    { id: 'users', label: 'User Management', icon: User },
+    { id: 'activity', label: 'Activity Logs', icon: TrendingUp },
+    { id: 'admin-logs', label: 'Admin Logs', icon: Lock },
+    { id: 'stats', label: 'Statistics', icon: Target }
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-red-500 to-purple-600 text-white rounded-xl p-6">
+        <h2 className="text-2xl font-bold mb-2">👑 Admin Panel</h2>
+        <p className="opacity-90">Manage users, view logs, and monitor system activity</p>
+      </div>
+
+      {/* Admin Tabs */}
+      <div className="bg-white rounded-xl p-4 shadow-sm border">
+        <div className="flex flex-wrap gap-2">
+          {adminTabs.map(tab => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveAdminTab(tab.id)}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+                  activeAdminTab === tab.id
+                    ? 'bg-red-100 text-red-700 border border-red-200'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                <Icon size={16} />
+                <span className="font-medium">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* User Management */}
+      {activeAdminTab === 'users' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">👥 User Management</h3>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  <th className="border border-gray-300 px-3 py-2 text-left">Email</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Username</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Signup Date</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Cycles</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Last Period</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Admin</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((userData) => (
+                  <tr key={userData.id} className="hover:bg-gray-50">
+                    <td className="border border-gray-300 px-3 py-2">{userData.email}</td>
+                    <td className="border border-gray-300 px-3 py-2">{userData.username}</td>
+                    <td className="border border-gray-300 px-3 py-2">
+                      {new Date(userData.signup_date).toLocaleDateString()}
+                    </td>
+                    <td className="border border-gray-300 px-3 py-2">{userData.cycle_count}</td>
+                    <td className="border border-gray-300 px-3 py-2">
+                      {userData.last_period_date ? new Date(userData.last_period_date).toLocaleDateString() : 'None'}
+                    </td>
+                    <td className="border border-gray-300 px-3 py-2">
+                      <span className={`px-2 py-1 rounded text-xs ${
+                        userData.is_admin ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {userData.is_admin ? 'Admin' : 'User'}
+                      </span>
+                    </td>
+                    <td className="border border-gray-300 px-3 py-2">
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
+                          disabled={userData.id === user.id}
+                          className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300"
+                        >
+                          {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
+                        </button>
+                        <button
+                          onClick={() => deleteUser(userData.id, userData.username)}
+                          disabled={userData.id === user.id}
+                          className="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 disabled:bg-gray-300"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Activity Logs */}
+      {activeAdminTab === 'activity' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">📊 User Activity Logs</h3>
+          
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {activityLogs.map((log) => (
+              <div key={log.id} className="border border-gray-200 rounded-lg p-3">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-medium text-gray-800">
+                      {log.user_profiles?.username || 'Unknown User'} - {log.action}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {new Date(log.created_at).toLocaleString()}
+                    </p>
+                    {log.details && (
+                      <pre className="text-xs text-gray-500 mt-1 bg-gray-50 p-2 rounded">
+                        {JSON.stringify(log.details, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Logs */}
+      {activeAdminTab === 'admin-logs' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">🔐 Admin Action Logs</h3>
+          
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {adminLogs.map((log) => (
+              <div key={log.id} className="border border-red-200 rounded-lg p-3 bg-red-50">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-medium text-red-800">
+                      {log.user_profiles?.username || 'Unknown Admin'} - {log.action}
+                    </p>
+                    <p className="text-sm text-red-600">
+                      {new Date(log.created_at).toLocaleString()}
+                    </p>
+                    {log.details && (
+                      <pre className="text-xs text-red-500 mt-1 bg-white p-2 rounded">
+                        {JSON.stringify(log.details, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Statistics */}
+      {activeAdminTab === 'stats' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">📈 System Statistics</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="text-center">
+              <p className="text-3xl font-bold text-blue-600">{users.length}</p>
+              <p className="text-sm text-gray-600">Total Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-green-600">
+                {users.filter(u => u.is_admin).length}
+              </p>
+              <p className="text-sm text-gray-600">Admins</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-purple-600">
+                {users.reduce((sum, u) => sum + (u.cycle_count || 0), 0)}
+              </p>
+              <p className="text-sm text-gray-600">Total Cycles</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-red-600">
+                {users.filter(u => u.cycle_count > 0).length}
+              </p>
+              <p className="text-sm text-gray-600">Active Users</p>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <h4 className="font-medium text-gray-800 mb-3">Recent Signups</h4>
+            <div className="space-y-2">
+              {users.slice(0, 5).map((userData) => (
+                <div key={userData.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="font-medium">{userData.username}</span>
+                  <span className="text-sm text-gray-600">
+                    {new Date(userData.signup_date).toLocaleDateString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MainApp = ({ user, setUser }) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [cycles, setCycles] = useState([]);
@@ -207,6 +538,7 @@ const MainApp = ({ user, setUser }) => {
   useEffect(() => {
     if (user) {
       fetchCycles();
+      logActivity('app_accessed', { timestamp: new Date().toISOString() });
     }
   }, [user]);
 
@@ -224,7 +556,22 @@ const MainApp = ({ user, setUser }) => {
     }
   };
 
+  const logActivity = async (action, details = {}) => {
+    try {
+      await supabase
+        .from('user_activity_logs')
+        .insert([{
+          action,
+          details,
+          user_agent: navigator.userAgent
+        }]);
+    } catch (error) {
+      console.error('Error logging activity:', error);
+    }
+  };
+
   const handleSignOut = async () => {
+    await logActivity('user_logout');
     const { error } = await supabase.auth.signOut();
     if (error) console.error('Error signing out:', error);
   };
@@ -235,6 +582,11 @@ const MainApp = ({ user, setUser }) => {
     { id: 'pregnancy', label: 'Pregnancy Planner', icon: Baby },
     { id: 'profile', label: 'Profile', icon: User }
   ];
+
+  // Add admin tab if user is admin
+  if (user?.is_admin) {
+    tabs.push({ id: 'admin', label: 'Admin Panel', icon: Lock });
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -250,6 +602,11 @@ const MainApp = ({ user, setUser }) => {
               <div className="flex items-center space-x-2">
                 <User className="text-gray-500" size={20} />
                 <span className="text-gray-700">{user?.full_name || user?.username || 'User'}</span>
+                {user?.is_admin && (
+                  <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded font-medium">
+                    👑 Admin
+                  </span>
+                )}
               </div>
               <button
                 onClick={handleSignOut}
@@ -291,9 +648,10 @@ const MainApp = ({ user, setUser }) => {
           {/* Main Content */}
           <div className="flex-1">
             {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
-            {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} />}
+            {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logActivity={logActivity} />}
             {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
             {activeTab === 'profile' && <Profile user={user} setUser={setUser} />}
+            {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} />}
           </div>
         </div>
       </div>
@@ -405,7 +763,7 @@ const Dashboard = ({ user, cycles }) => {
   );
 };
 
-const PeriodTracker = ({ user, cycles, setCycles, fetchCycles }) => {
+const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logActivity }) => {
   const [newPeriod, setNewPeriod] = useState({
     startDate: '',
     endDate: '',
@@ -451,8 +809,8 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles }) => {
         ]);
 
       if (error) throw error;
-
       await fetchCycles();
+      await logActivity('period_added', { start_date: newPeriod.startDate, flow: newPeriod.flow });
       setNewPeriod({
         startDate: '',
         endDate: '',
