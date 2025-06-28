@@ -406,6 +406,9 @@ const AdminPanel = ({ user }) => {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [tempPassword, setTempPassword] = useState('');
+  
+  // ADD THIS LINE - Missing loading state
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user?.is_admin) {
