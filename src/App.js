@@ -2,6 +2,7 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from './supabaseClient';
 import { Calendar, Heart, Baby, User, Lock, TrendingUp, Clock, Target, Trash2, LogOut, UserX, UserCheck, Activity, Shield, Database, AlertTriangle, Moon, Sun, Download, BarChart3, PieChart, LineChart, Smartphone, ChevronDown, Filter, Search, X } from 'lucide-react';
+import ErrorBoundary from './ErrorBoundary';
 
 // Dark Mode Context
 const ThemeContext = createContext();
@@ -397,12 +398,24 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
 
           {/* Main Content */}
           <div className="flex-1">
-            {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
-            {activeTab === 'analytics' && <AdvancedAnalytics user={user} cycles={cycles} />}
-            {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logUserEvent={logUserEvent} />}
-            {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
-            {activeTab === 'profile' && <Profile user={user} setUser={setUser} logUserEvent={logUserEvent} />}
-            {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} logUserEvent={logUserEvent} />}
+            <ErrorBoundary>
+              {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
+            </ErrorBoundary>
+            <ErrorBoundary>
+              {activeTab === 'analytics' && <AdvancedAnalytics user={user} cycles={cycles} />}
+            </ErrorBoundary>
+            <ErrorBoundary>
+              {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logUserEvent={logUserEvent} />}
+            </ErrorBoundary>
+            <ErrorBoundary>
+              {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
+            </ErrorBoundary>
+            <ErrorBoundary>
+              {activeTab === 'profile' && <Profile user={user} setUser={setUser} logUserEvent={logUserEvent} />}
+            </ErrorBoundary>
+            <ErrorBoundary>
+              {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} logUserEvent={logUserEvent} />}
+            </ErrorBoundary>
           </div>
         </div>
       </div>
