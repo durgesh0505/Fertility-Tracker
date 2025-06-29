@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { Calendar, Heart, Baby, User, Lock, AlertCircle, TrendingUp, Clock, Target, Trash2, LogOut } from 'lucide-react';
+import { Calendar, Heart, Baby, User, Lock, AlertCircle, TrendingUp, Clock, Target, Trash2, LogOut, UserX, UserCheck, Activity, Shield, Database, AlertTriangle } from 'lucide-react';
 
 const App = () => {
   const [session, setSession] = useState(null);
@@ -8,12 +8,61 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
 
+  // COMPREHENSIVE LOGGING UTILITY FUNCTIONS
+  const logUserEvent = async (action, category = 'general', details = {}) => {
+    try {
+      await supabase.rpc('log_user_event', {
+        event_action: action,
+        event_category: category,
+        event_details: details
+      });
+    } catch (error) {
+      console.error('Failed to log user event:', error);
+    }
+  };
+
+  const logSystemEvent = async (eventType, source, message, details = {}) => {
+    try {
+      await supabase.rpc('log_system_event', {
+        event_type: eventType,
+        event_source: source,
+        event_message: message,
+        event_details: details
+      });
+    } catch (error) {
+      console.error('Failed to log system event:', error);
+    }
+  };
+
+  const updateLoginStats = async (userId) => {
+    try {
+      // Update login count and last login time
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          last_login_at: new Date().toISOString(),
+          login_count: supabase.raw('login_count + 1')
+        })
+        .eq('id', userId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Failed to update login stats:', error);
+    }
+  };
+
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) {
         fetchUserProfile(session.user.id);
+        // Log initial app access
+        logUserEvent('app_accessed', 'auth', {
+          timestamp: new Date().toISOString(),
+          session_id: session.access_token.substring(0, 10) + '...'
+        });
+        updateLoginStats(session.user.id);
       }
       setLoading(false);
     });
@@ -21,12 +70,25 @@ const App = () => {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session);
-      if (session) {
-        fetchUserProfile(session.user.id);
-      } else {
+      
+      if (event === 'SIGNED_IN' && session) {
+        await fetchUserProfile(session.user.id);
+        await logUserEvent('user_login', 'auth', {
+          login_method: 'email',
+          timestamp: new Date().toISOString()
+        });
+        await updateLoginStats(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
         setUser(null);
+        await logSystemEvent('info', 'auth', 'User signed out', {
+          timestamp: new Date().toISOString()
+        });
+      } else if (event === 'TOKEN_REFRESHED') {
+        await logUserEvent('session_refreshed', 'auth', {
+          timestamp: new Date().toISOString()
+        });
       }
     });
 
@@ -43,19 +105,45 @@ const App = () => {
 
       if (error && error.code !== 'PGRST116') {
         console.error('Error fetching profile:', error);
+        await logSystemEvent('error', 'database', 'Failed to fetch user profile', {
+          user_id: userId,
+          error: error.message
+        });
         return;
       }
 
       if (data) {
+        // Check if user is deactivated
+        if (!data.is_active) {
+          await logUserEvent('deactivated_user_attempted_access', 'auth', {
+            timestamp: new Date().toISOString()
+          }, userId);
+          alert('Your account has been deactivated. Please contact support.');
+          await supabase.auth.signOut();
+          return;
+        }
+
         setUser(data);
         
         // Check if password reset is required
         if (data.password_reset_required) {
           setShowPasswordChangeModal(true);
+          await logUserEvent('password_reset_modal_shown', 'auth', {
+            reset_required_since: data.password_reset_at
+          });
         }
+
+        await logUserEvent('profile_loaded', 'profile', {
+          has_cycles: data.typical_period_length !== 5,
+          is_admin: data.is_admin
+        });
       }
     } catch (error) {
       console.error('Error:', error);
+      await logSystemEvent('error', 'api', 'Profile fetch failed', {
+        error: error.message,
+        user_id: userId
+      });
     }
   };
 
@@ -73,24 +161,30 @@ const App = () => {
   }
 
   if (!session) {
-    return <AuthComponent />;
+    return <AuthComponent logUserEvent={logUserEvent} logSystemEvent={logSystemEvent} />;
   }
 
   return (
     <>
-      <MainApp user={user} setUser={setUser} />
+      <MainApp 
+        user={user} 
+        setUser={setUser} 
+        logUserEvent={logUserEvent} 
+        logSystemEvent={logSystemEvent} 
+      />
       {showPasswordChangeModal && (
         <PasswordChangeModal 
           user={user} 
           setUser={setUser}
           onClose={() => setShowPasswordChangeModal(false)}
+          logUserEvent={logUserEvent}
         />
       )}
     </>
   );
 };
 
-const PasswordChangeModal = ({ user, setUser, onClose }) => {
+const PasswordChangeModal = ({ user, setUser, onClose, logUserEvent }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -118,11 +212,18 @@ const PasswordChangeModal = ({ user, setUser, onClose }) => {
   const handlePasswordChange = async () => {
     if (!passwordValidation.isValid) {
       setMessage('Password does not meet security requirements.');
+      await logUserEvent('password_change_failed', 'auth', {
+        reason: 'validation_failed',
+        requirements_met: passwordValidation
+      });
       return;
     }
 
     if (newPassword !== confirmPassword) {
       setMessage('Passwords do not match.');
+      await logUserEvent('password_change_failed', 'auth', {
+        reason: 'passwords_dont_match'
+      });
       return;
     }
 
@@ -149,10 +250,18 @@ const PasswordChangeModal = ({ user, setUser, onClose }) => {
       // Update local user state
       setUser({ ...user, password_reset_required: false });
       
+      await logUserEvent('password_changed_successfully', 'auth', {
+        reset_completed_at: new Date().toISOString(),
+        was_admin_reset: true
+      });
+      
       alert('Password updated successfully!');
       onClose();
     } catch (error) {
       setMessage(`Error updating password: ${error.message}`);
+      await logUserEvent('password_change_error', 'auth', {
+        error: error.message
+      });
     } finally {
       setLoading(false);
     }
@@ -235,16 +344,17 @@ const PasswordChangeModal = ({ user, setUser, onClose }) => {
   );
 };
 
-const AuthComponent = () => {
+// UPDATED AUTH COMPONENT WITH LOGGING
+const AuthComponent = ({ logUserEvent, logSystemEvent }) => {
   const [isSignUp, setIsSignUp] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [birthDate, setBirthDate] = useState('');
   const [weight, setWeight] = useState('');
   const [weightUnit, setWeightUnit] = useState('kg');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [showPasswordRequirements, setShowPasswordRequirements] = useState(false);
@@ -284,7 +394,7 @@ const AuthComponent = () => {
     if (!weight) return null;
     const weightNum = parseFloat(weight);
     if (unit === 'lb') {
-      return (weightNum * 0.453592).toFixed(1); // Convert lb to kg
+      return (weightNum * 0.453592).toFixed(1);
     }
     return weightNum;
   };
@@ -298,9 +408,26 @@ const AuthComponent = () => {
 
     try {
       if (isSignUp) {
+        // Log signup attempt
+        await logSystemEvent('info', 'auth', 'Signup attempt started', {
+          email: email,
+          has_weight: !!weight,
+          weight_unit: weightUnit
+        });
+
         // Validate required fields
         if (!email || !password || !firstName || !lastName || !birthDate) {
           setMessage('Please fill in all required fields.');
+          await logSystemEvent('warning', 'auth', 'Signup failed - missing required fields', {
+            email: email,
+            missing_fields: {
+              email: !email,
+              password: !password,
+              firstName: !firstName,
+              lastName: !lastName,
+              birthDate: !birthDate
+            }
+          });
           setLoading(false);
           return;
         }
@@ -309,6 +436,10 @@ const AuthComponent = () => {
         if (!passwordValidation.isValid) {
           setMessage('Password does not meet security requirements. Please check all requirements below.');
           setShowPasswordRequirements(true);
+          await logSystemEvent('warning', 'auth', 'Signup failed - weak password', {
+            email: email,
+            password_requirements: passwordValidation
+          });
           setLoading(false);
           return;
         }
@@ -316,6 +447,9 @@ const AuthComponent = () => {
         // Validate password confirmation
         if (password !== confirmPassword) {
           setMessage('Passwords do not match.');
+          await logSystemEvent('warning', 'auth', 'Signup failed - password mismatch', {
+            email: email
+          });
           setLoading(false);
           return;
         }
@@ -324,6 +458,10 @@ const AuthComponent = () => {
         const age = calculateAge(birthDate);
         if (age < 13) {
           setMessage('You must be at least 13 years old to create an account.');
+          await logSystemEvent('warning', 'auth', 'Signup failed - age restriction', {
+            email: email,
+            calculated_age: age
+          });
           setLoading(false);
           return;
         }
@@ -344,46 +482,58 @@ const AuthComponent = () => {
           }
         });
 
-        if (error) throw error;
+        if (error) {
+          await logSystemEvent('error', 'auth', 'Signup failed - auth error', {
+            email: email,
+            error: error.message
+          });
+          throw error;
+        }
 
-        // If signup successful and user is confirmed, create profile
+        // If signup successful
         if (authData.user && !authData.user.email_confirmed_at) {
           setMessage('Please check your email for the confirmation link!');
+          await logSystemEvent('info', 'auth', 'Signup successful - email confirmation required', {
+            user_id: authData.user.id,
+            email: email
+          });
         } else if (authData.user) {
-          // Create user profile
-          const { error: profileError } = await supabase
-            .from('user_profiles')
-            .insert([{
-              id: authData.user.id,
-              username: email.split('@')[0],
-              full_name: `${firstName} ${lastName}`,
-              first_name: firstName,
-              last_name: lastName,
-              date_of_birth: birthDate,
-              age: age,
-              weight: convertWeight(weight, weightUnit),
-              typical_cycle_length: 28,
-              cycle_length_variation: 2,
-              typical_period_length: 5,
-              period_length_variation: 1,
-              is_admin: false
-            }]);
-
-          if (profileError) {
-            console.error('Profile creation error:', profileError);
-          }
+          await logSystemEvent('info', 'auth', 'Signup successful - user confirmed', {
+            user_id: authData.user.id,
+            email: email
+          });
         }
       } else {
+        // Log signin attempt
+        await logSystemEvent('info', 'auth', 'Signin attempt', {
+          email: email
+        });
+
         // Sign in
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
-        if (error) throw error;
+        if (error) {
+          await logSystemEvent('warning', 'auth', 'Signin failed', {
+            email: email,
+            error: error.message
+          });
+          throw error;
+        }
+
+        await logSystemEvent('info', 'auth', 'Signin successful', {
+          email: email
+        });
       }
     } catch (error) {
       setMessage(error.message);
+      await logSystemEvent('error', 'auth', 'Authentication error', {
+        action: isSignUp ? 'signup' : 'signin',
+        email: email,
+        error: error.message
+      });
     } finally {
       setLoading(false);
     }
@@ -391,7 +541,7 @@ const AuthComponent = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 to-purple-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="text-center mb-6">
           <Heart className="mx-auto text-pink-500 mb-4" size={48} />
           <h1 className="text-2xl font-bold text-gray-800">Fertility Tracker</h1>
@@ -399,41 +549,9 @@ const AuthComponent = () => {
         </div>
 
         <form onSubmit={handleAuth} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-              required
-            />
-          </div>
-
+          {/* REORDERED FORM: Personal info first, then email/password */}
           {isSignUp && (
             <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password *</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                  required
-                />
-              </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
@@ -504,6 +622,47 @@ const AuthComponent = () => {
                 )}
               </div>
 
+              {/* Divider */}
+              <div className="border-t border-gray-200 my-4"></div>
+            </>
+          )}
+
+          {/* Email and Password Section */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+              required
+            />
+          </div>
+
+          {isSignUp && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password *</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+                  required
+                />
+              </div>
+
               {(showPasswordRequirements || password) && (
                 <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                   <h4 className="font-medium text-gray-800 mb-2">Password Requirements:</h4>
@@ -571,94 +730,61 @@ const AuthComponent = () => {
   );
 };
 
-// AdminPanel component with fixed deleteUser function
-const AdminPanel = ({ user }) => {
+// UPDATED ADMIN PANEL WITH COMPREHENSIVE LOGGING VIEWS
+const AdminPanel = ({ user, logUserEvent }) => {
   const [activeAdminTab, setActiveAdminTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
+  const [systemLogs, setSystemLogs] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [tempPassword, setTempPassword] = useState('');
-  const [loading, setLoading] = useState(false); // Added missing loading state
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user?.is_admin) {
       fetchUsers();
       fetchActivityLogs();
       fetchAdminLogs();
+      fetchSystemLogs();
+      fetchAuditLogs();
+      
+      // Log admin panel access
+      logUserEvent('admin_panel_accessed', 'admin', {
+        timestamp: new Date().toISOString(),
+        initial_tab: activeAdminTab
+      });
     }
   }, [user]);
-
-  const validatePassword = (password) => {
-    const minLength = password.length >= 8;
-    const hasUppercase = /[A-Z]/.test(password);
-    const hasLowercase = /[a-z]/.test(password);
-    const hasNumber = /\d/.test(password);
-    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
-    
-    return {
-      minLength,
-      hasUppercase,
-      hasLowercase,
-      hasNumber,
-      hasSymbol,
-      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
-    };
-  };
-
-  const generateTempPassword = () => {
-    const length = 12;
-    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-    let password = "";
-    
-    // Ensure at least one of each required character type
-    password += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.floor(Math.random() * 26)]; // Uppercase
-    password += "abcdefghijklmnopqrstuvwxyz"[Math.floor(Math.random() * 26)]; // Lowercase
-    password += "0123456789"[Math.floor(Math.random() * 10)]; // Number
-    password += "!@#$%^&*"[Math.floor(Math.random() * 8)]; // Symbol
-    
-    // Fill the rest randomly
-    for (let i = 4; i < length; i++) {
-      password += charset[Math.floor(Math.random() * charset.length)];
-    }
-    
-    // Shuffle the password
-    return password.split('').sort(() => Math.random() - 0.5).join('');
-  };
 
   const resetUserPassword = async (userId, username) => {
     try {
       setLoading(true);
       
-      // Generate a secure temporary password
-      const tempPass = generateTempPassword();
-      
-      // Update user profile to mark password reset required
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .update({ 
-          password_reset_required: true,
-          password_reset_at: new Date().toISOString()
-        })
-        .eq('id', userId);
+      const { data, error } = await supabase
+        .rpc('admin_reset_user_password', { target_user_id: userId });
 
-      if (profileError) throw profileError;
+      if (error) throw error;
 
-      // Note: In a real application, you would need admin privileges to reset passwords
-      // This is a simplified version - the actual password reset would need to be done
-      // through Supabase admin API or your backend
-      
-      setTempPassword(tempPass);
+      setTempPassword(data);
       setSelectedUser({ id: userId, username });
       setShowPasswordModal(true);
 
-      await logAdminAction('password_reset', { userId, username });
       await fetchUsers();
+      await logUserEvent('password_reset_completed', 'admin', {
+        target_user_id: userId,
+        target_username: username
+      });
       
-      alert(`Password reset initiated for ${username}. Temporary password generated.`);
     } catch (error) {
       console.error('Error resetting password:', error);
+      await logUserEvent('password_reset_failed', 'admin', {
+        target_user_id: userId,
+        target_username: username,
+        error: error.message
+      });
       alert(`Error resetting password: ${error.message}`);
     } finally {
       setLoading(false);
@@ -669,34 +795,12 @@ const AdminPanel = ({ user }) => {
     try {
       setLoading(true);
       
-      // Get all user profiles with auth user data
-      const { data: profiles, error: profileError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .rpc('get_admin_users');
 
-      if (profileError) throw profileError;
+      if (error) throw error;
 
-      // Get cycle counts for each user
-      const usersWithStats = await Promise.all(
-        profiles.map(async (profile) => {
-          const { data: cycles, error: cycleError } = await supabase
-            .from('cycles')
-            .select('start_date')
-            .eq('user_id', profile.id)
-            .order('start_date', { ascending: false });
-
-          return {
-            ...profile,
-            email: profile.username + '@domain.com', // You might need to adjust this
-            signup_date: profile.created_at,
-            cycle_count: cycles?.length || 0,
-            last_period_date: cycles?.[0]?.start_date || null
-          };
-        })
-      );
-
-      setUsers(usersWithStats);
+      setUsers(data || []);
     } catch (error) {
       console.error('Error fetching users:', error);
       alert(`Error loading users: ${error.message}`);
@@ -707,7 +811,6 @@ const AdminPanel = ({ user }) => {
 
   const fetchActivityLogs = async () => {
     try {
-      console.log('Fetching activity logs...');
       const { data, error } = await supabase
         .from('user_activity_logs')
         .select(`
@@ -717,22 +820,15 @@ const AdminPanel = ({ user }) => {
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (error) {
-        console.error('Error fetching activity logs:', error);
-        throw error;
-      }
-
-      console.log('Fetched activity logs:', data);
+      if (error) throw error;
       setActivityLogs(data || []);
     } catch (error) {
       console.error('Error fetching activity logs:', error);
-      // Don't show alert for activity logs, just log the error
     }
   };
 
   const fetchAdminLogs = async () => {
     try {
-      console.log('Fetching admin logs...');
       const { data, error } = await supabase
         .from('admin_logs')
         .select(`
@@ -740,33 +836,42 @@ const AdminPanel = ({ user }) => {
           user_profiles!admin_user_id(username, full_name)
         `)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(100);
 
-      if (error) {
-        console.error('Error fetching admin logs:', error);
-        throw error;
-      }
-
-      console.log('Fetched admin logs:', data);
+      if (error) throw error;
       setAdminLogs(data || []);
     } catch (error) {
       console.error('Error fetching admin logs:', error);
-      // Don't show alert for admin logs, just log the error
     }
   };
 
-  const logAdminAction = async (action, details = {}, targetUserId = null) => {
+  const fetchSystemLogs = async () => {
     try {
-      await supabase
-        .from('admin_logs')
-        .insert([{
-          action,
-          details,
-          target_user_id: targetUserId
-        }]);
-      await fetchAdminLogs();
+      const { data, error } = await supabase
+        .from('system_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      setSystemLogs(data || []);
     } catch (error) {
-      console.error('Error logging admin action:', error);
+      console.error('Error fetching system logs:', error);
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('audit_logs')
+        .select('*')
+        .order('changed_at', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+      setAuditLogs(data || []);
+    } catch (error) {
+      console.error('Error fetching audit logs:', error);
     }
   };
 
@@ -779,77 +884,116 @@ const AdminPanel = ({ user }) => {
 
       if (error) throw error;
 
-      await logAdminAction(
-        currentStatus ? 'admin_removed' : 'admin_granted',
-        { userId, previousStatus: currentStatus },
-        userId
-      );
-
       await fetchUsers();
+      await logUserEvent('user_admin_status_changed', 'admin', {
+        target_user_id: userId,
+        old_status: currentStatus,
+        new_status: !currentStatus
+      });
+      
       alert(`User ${currentStatus ? 'removed from' : 'granted'} admin privileges.`);
     } catch (error) {
       console.error('Error updating admin status:', error);
+      await logUserEvent('admin_status_change_failed', 'admin', {
+        target_user_id: userId,
+        error: error.message
+      });
       alert('Error updating admin status.');
     }
   };
 
-  // FIXED deleteUser function
-  const deleteUser = async (userId, username) => {
+  const deactivateUser = async (userId, username) => {
     // eslint-disable-next-line no-restricted-globals
-    if (!confirm(`Are you sure you want to delete user "${username}"? This will permanently delete their account and all data. This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to deactivate user "${username}"? They will not be able to access their account until reactivated.`)) {
       return;
     }
 
     try {
       setLoading(true);
 
-      // Log the admin action first
-      await logAdminAction('user_deletion_attempted', { userId, username });
+      const { data, error } = await supabase
+        .rpc('admin_deactivate_user', { target_user_id: userId });
 
-      // Step 1: Delete all user data (cycles will cascade delete due to foreign keys)
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .delete()
-        .eq('id', userId);
+      if (error) throw error;
 
-      if (profileError) {
-        console.error('Error deleting user profile:', profileError);
-        throw new Error(`Failed to delete user profile: ${profileError.message}`);
-      }
-
-      // Step 2: Delete activity logs for this user
-      await supabase
-        .from('user_activity_logs')
-        .delete()
-        .eq('user_id', userId);
-
-      // Step 3: Delete admin logs where this user was the target
-      await supabase
-        .from('admin_logs')
-        .delete()
-        .eq('target_user_id', userId);
-
-      // Note: Deleting the actual auth user requires admin privileges
-      // In a production environment, you would call:
-      // const { error: authError } = await supabase.auth.admin.deleteUser(userId);
-      
-      await logAdminAction('user_deleted', { userId, username });
       await fetchUsers();
+      await logUserEvent('user_deactivated', 'admin', {
+        target_user_id: userId,
+        target_username: username
+      });
       
-      alert(`User "${username}" has been successfully deleted along with all their data.`);
+      alert(`User "${username}" has been deactivated successfully.`);
     } catch (error) {
-      console.error('Error deleting user:', error);
-      alert(`Error deleting user: ${error.message}`);
-      await logAdminAction('user_deletion_failed', { userId, username, error: error.message });
+      console.error('Error deactivating user:', error);
+      await logUserEvent('user_deactivation_failed', 'admin', {
+        target_user_id: userId,
+        target_username: username,
+        error: error.message
+      });
+      alert(`Error deactivating user: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
+  const reactivateUser = async (userId, username) => {
+    try {
+      setLoading(true);
+
+      const { data, error } = await supabase
+        .rpc('admin_reactivate_user', { target_user_id: userId });
+
+      if (error) throw error;
+
+      await fetchUsers();
+      await logUserEvent('user_reactivated', 'admin', {
+        target_user_id: userId,
+        target_username: username
+      });
+      
+      alert(`User "${username}" has been reactivated successfully.`);
+    } catch (error) {
+      console.error('Error reactivating user:', error);
+      await logUserEvent('user_reactivation_failed', 'admin', {
+        target_user_id: userId,
+        target_username: username,
+        error: error.message
+      });
+      alert(`Error reactivating user: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getSeverityColor = (severity) => {
+    switch (severity) {
+      case 'critical': return 'text-red-800 bg-red-100 border-red-200';
+      case 'error': return 'text-red-700 bg-red-50 border-red-200';
+      case 'warning': return 'text-yellow-700 bg-yellow-50 border-yellow-200';
+      case 'info':
+      default: return 'text-blue-700 bg-blue-50 border-blue-200';
+    }
+  };
+
+  const getCategoryColor = (category) => {
+    switch (category) {
+      case 'auth': return 'text-purple-700 bg-purple-100';
+      case 'cycle': return 'text-pink-700 bg-pink-100';
+      case 'profile': return 'text-green-700 bg-green-100';
+      case 'admin': return 'text-red-700 bg-red-100';
+      case 'security': return 'text-orange-700 bg-orange-100';
+      case 'user_management': return 'text-indigo-700 bg-indigo-100';
+      case 'system': return 'text-gray-700 bg-gray-100';
+      default: return 'text-blue-700 bg-blue-100';
+    }
+  };
+
   const adminTabs = [
     { id: 'users', label: 'User Management', icon: User },
-    { id: 'activity', label: 'Activity Logs', icon: TrendingUp },
-    { id: 'admin-logs', label: 'Admin Logs', icon: Lock },
+    { id: 'activity', label: 'User Activity', icon: Activity },
+    { id: 'admin-logs', label: 'Admin Actions', icon: Shield },
+    { id: 'system-logs', label: 'System Events', icon: Database },
+    { id: 'audit', label: 'Data Audit', icon: AlertTriangle },
     { id: 'stats', label: 'Statistics', icon: Target }
   ];
 
@@ -857,7 +1001,7 @@ const AdminPanel = ({ user }) => {
     <div className="space-y-6">
       <div className="bg-gradient-to-r from-red-500 to-purple-600 text-white rounded-xl p-6">
         <h2 className="text-2xl font-bold mb-2">👑 Admin Panel</h2>
-        <p className="opacity-90">Manage users, view logs, and monitor system activity</p>
+        <p className="opacity-90">Comprehensive system management and monitoring</p>
       </div>
 
       {/* Admin Tabs */}
@@ -868,7 +1012,13 @@ const AdminPanel = ({ user }) => {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveAdminTab(tab.id)}
+                onClick={() => {
+                  setActiveAdminTab(tab.id);
+                  logUserEvent('admin_tab_changed', 'admin', {
+                    new_tab: tab.id,
+                    tab_label: tab.label
+                  });
+                }}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
                   activeAdminTab === tab.id
                     ? 'bg-red-100 text-red-700 border border-red-200'
@@ -889,7 +1039,10 @@ const AdminPanel = ({ user }) => {
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-semibold text-gray-800">👥 User Management</h3>
             <button
-              onClick={fetchUsers}
+              onClick={() => {
+                fetchUsers();
+                logUserEvent('users_list_refreshed', 'admin');
+              }}
               disabled={loading}
               className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400"
             >
@@ -903,30 +1056,38 @@ const AdminPanel = ({ user }) => {
                 <tr className="bg-gray-50">
                   <th className="border border-gray-300 px-3 py-2 text-left">Name</th>
                   <th className="border border-gray-300 px-3 py-2 text-left">Username</th>
-                  <th className="border border-gray-300 px-3 py-2 text-left">Signup Date</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Status</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Last Login</th>
+                  <th className="border border-gray-300 px-3 py-2 text-left">Login Count</th>
                   <th className="border border-gray-300 px-3 py-2 text-left">Cycles</th>
-                  <th className="border border-gray-300 px-3 py-2 text-left">Last Period</th>
                   <th className="border border-gray-300 px-3 py-2 text-left">Admin</th>
                   <th className="border border-gray-300 px-3 py-2 text-left">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {users.map((userData) => (
-                  <tr key={userData.id} className="hover:bg-gray-50">
+                  <tr key={userData.id} className={`hover:bg-gray-50 ${!userData.is_active ? 'bg-red-50' : ''}`}>
                     <td className="border border-gray-300 px-3 py-2">
                       {userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'N/A'}
                     </td>
                     <td className="border border-gray-300 px-3 py-2">{userData.username}</td>
                     <td className="border border-gray-300 px-3 py-2">
-                      {new Date(userData.signup_date).toLocaleDateString()}
+                      <span className={`px-2 py-1 rounded text-xs ${
+                        userData.is_active 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {userData.is_active ? 'Active' : 'Deactivated'}
+                      </span>
                     </td>
+                    <td className="border border-gray-300 px-3 py-2">
+                      {userData.last_login_at ? new Date(userData.last_login_at).toLocaleDateString() : 'Never'}
+                    </td>
+                    <td className="border border-gray-300 px-3 py-2">{userData.login_count || 0}</td>
                     <td className="border border-gray-300 px-3 py-2">{userData.cycle_count}</td>
                     <td className="border border-gray-300 px-3 py-2">
-                      {userData.last_period_date ? new Date(userData.last_period_date).toLocaleDateString() : 'None'}
-                    </td>
-                    <td className="border border-gray-300 px-3 py-2">
                       <span className={`px-2 py-1 rounded text-xs ${
-                        userData.is_admin ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
+                        userData.is_admin ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
                       }`}>
                         {userData.is_admin ? 'Admin' : 'User'}
                       </span>
@@ -940,20 +1101,36 @@ const AdminPanel = ({ user }) => {
                         >
                           {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
                         </button>
-                        <button
-                          onClick={() => resetUserPassword(userData.id, userData.username)}
-                          disabled={loading}
-                          className="bg-yellow-500 text-white px-2 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
-                        >
-                          Reset Password
-                        </button>
-                        <button
-                          onClick={() => deleteUser(userData.id, userData.username)}
-                          disabled={userData.id === user.id || loading}
-                          className="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600 disabled:bg-gray-300"
-                        >
-                          Delete User
-                        </button>
+                        
+                        {userData.is_active && (
+                          <button
+                            onClick={() => resetUserPassword(userData.id, userData.username)}
+                            disabled={loading}
+                            className="bg-yellow-500 text-white px-2 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
+                          >
+                            Reset Password
+                          </button>
+                        )}
+                        
+                        {userData.is_active ? (
+                          <button
+                            onClick={() => deactivateUser(userData.id, userData.username)}
+                            disabled={userData.id === user.id || loading}
+                            className="bg-orange-500 text-white px-2 py-1 rounded text-xs hover:bg-orange-600 disabled:bg-gray-300 flex items-center space-x-1"
+                          >
+                            <UserX size={12} />
+                            <span>Deactivate</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => reactivateUser(userData.id, userData.username)}
+                            disabled={loading}
+                            className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 disabled:bg-gray-300 flex items-center space-x-1"
+                          >
+                            <UserCheck size={12} />
+                            <span>Reactivate</span>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -961,12 +1138,322 @@ const AdminPanel = ({ user }) => {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* User Activity Logs */}
+      {activeAdminTab === 'activity' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold text-gray-800">📊 User Activity Logs</h3>
+            <button
+              onClick={() => {
+                fetchActivityLogs();
+                logUserEvent('activity_logs_refreshed', 'admin');
+              }}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
+            >
+              Refresh
+            </button>
+          </div>
           
-          {users.length === 0 && !loading && (
-            <div className="text-center py-8 text-gray-500">
-              No users found. Try refreshing the data.
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {activityLogs.map((log) => (
+              <div key={log.id} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-medium text-gray-800">
+                      {log.user_profiles?.username || 'Unknown User'}
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs ${getCategoryColor(log.category)}`}>
+                      {log.category}
+                    </span>
+                  </div>
+                  <span className="text-sm text-gray-500">
+                    {new Date(log.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="mb-2">
+                  <span className="font-medium text-gray-700">{log.action}</span>
+                </div>
+                {log.details && Object.keys(log.details).length > 0 && (
+                  <div className="bg-gray-50 rounded p-2">
+                    <pre className="text-xs text-gray-600 whitespace-pre-wrap">
+                      {JSON.stringify(log.details, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Action Logs */}
+      {activeAdminTab === 'admin-logs' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold text-gray-800">🔐 Admin Action Logs</h3>
+            <button
+              onClick={() => {
+                fetchAdminLogs();
+                logUserEvent('admin_logs_refreshed', 'admin');
+              }}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
+            >
+              Refresh
+            </button>
+          </div>
+          
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {adminLogs.map((log) => (
+              <div key={log.id} className={`border rounded-lg p-4 ${getSeverityColor(log.severity)}`}>
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-medium">
+                      {log.user_profiles?.username || 'Unknown Admin'}
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs ${getCategoryColor(log.category)}`}>
+                      {log.category}
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${getSeverityColor(log.severity)}`}>
+                      {log.severity}
+                    </span>
+                  </div>
+                  <span className="text-sm opacity-75">
+                    {new Date(log.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="mb-2">
+                  <span className="font-medium">{log.action}</span>
+                </div>
+                {log.details && Object.keys(log.details).length > 0 && (
+                  <div className="bg-white bg-opacity-50 rounded p-2">
+                    <pre className="text-xs whitespace-pre-wrap">
+                      {JSON.stringify(log.details, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* System Event Logs */}
+      {activeAdminTab === 'system-logs' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold text-gray-800">🖥️ System Event Logs</h3>
+            <button
+              onClick={() => {
+                fetchSystemLogs();
+                logUserEvent('system_logs_refreshed', 'admin');
+              }}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
+            >
+              Refresh
+            </button>
+          </div>
+          
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {systemLogs.map((log) => (
+              <div key={log.id} className={`border rounded-lg p-4 ${getSeverityColor(log.event_type)}`}>
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${getSeverityColor(log.event_type)}`}>
+                      {log.event_type}
+                    </span>
+                    <span className="text-sm font-medium">{log.source}</span>
+                  </div>
+                  <span className="text-sm opacity-75">
+                    {new Date(log.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="mb-2">
+                  <span className="font-medium">{log.message}</span>
+                </div>
+                {log.details && Object.keys(log.details).length > 0 && (
+                  <div className="bg-white bg-opacity-50 rounded p-2">
+                    <pre className="text-xs whitespace-pre-wrap">
+                      {JSON.stringify(log.details, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Data Audit Logs */}
+      {activeAdminTab === 'audit' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-semibold text-gray-800">🔍 Data Audit Trail</h3>
+            <button
+              onClick={() => {
+                fetchAuditLogs();
+                logUserEvent('audit_logs_refreshed', 'admin');
+              }}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
+            >
+              Refresh
+            </button>
+          </div>
+          
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {auditLogs.map((log) => (
+              <div key={log.id} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-medium text-gray-800">{log.table_name}</span>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      log.operation === 'INSERT' ? 'bg-green-100 text-green-800' :
+                      log.operation === 'UPDATE' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-red-100 text-red-800'
+                    }`}>
+                      {log.operation}
+                    </span>
+                  </div>
+                  <span className="text-sm text-gray-500">
+                    {new Date(log.changed_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="text-sm text-gray-600 mb-2">
+                  Record ID: <span className="font-mono">{log.record_id}</span>
+                </div>
+                {(log.old_values || log.new_values) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {log.old_values && (
+                      <div>
+                        <h5 className="font-medium text-gray-700 mb-1">Old Values:</h5>
+                        <div className="bg-red-50 rounded p-2">
+                          <pre className="text-xs text-gray-600 whitespace-pre-wrap">
+                            {JSON.stringify(log.old_values, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                    {log.new_values && (
+                      <div>
+                        <h5 className="font-medium text-gray-700 mb-1">New Values:</h5>
+                        <div className="bg-green-50 rounded p-2">
+                          <pre className="text-xs text-gray-600 whitespace-pre-wrap">
+                            {JSON.stringify(log.new_values, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Enhanced Statistics */}
+      {activeAdminTab === 'stats' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">📈 Comprehensive System Statistics</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div className="text-center">
+              <p className="text-3xl font-bold text-blue-600">{users.length}</p>
+              <p className="text-sm text-gray-600">Total Users</p>
             </div>
-          )}
+            <div className="text-center">
+              <p className="text-3xl font-bold text-green-600">
+                {users.filter(u => u.is_active).length}
+              </p>
+              <p className="text-sm text-gray-600">Active Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-red-600">
+                {users.filter(u => !u.is_active).length}
+              </p>
+              <p className="text-sm text-gray-600">Deactivated Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-purple-600">
+                {users.filter(u => u.is_admin).length}
+              </p>
+              <p className="text-sm text-gray-600">Administrators</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <h4 className="font-medium text-gray-800 mb-3">Activity Summary</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Users with cycles:</span>
+                  <span className="font-medium">{users.filter(u => u.cycle_count > 0).length}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Total cycles tracked:</span>
+                  <span className="font-medium">{users.reduce((sum, u) => sum + (u.cycle_count || 0), 0)}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Average cycles per user:</span>
+                  <span className="font-medium">
+                    {users.length > 0 ? 
+                      (users.reduce((sum, u) => sum + (u.cycle_count || 0), 0) / users.length).toFixed(1) : 
+                      '0'
+                    }
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Total user logins:</span>
+                  <span className="font-medium">{users.reduce((sum, u) => sum + (u.login_count || 0), 0)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium text-gray-800 mb-3">Recent Activity</h4>
+              <div className="space-y-2">
+                {users
+                  .filter(u => u.last_login_at)
+                  .sort((a, b) => new Date(b.last_login_at) - new Date(a.last_login_at))
+                  .slice(0, 5)
+                  .map((userData) => (
+                    <div key={userData.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                      <span className="font-medium text-sm">{userData.username}</span>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs text-gray-600">
+                          {new Date(userData.last_login_at).toLocaleDateString()}
+                        </span>
+                        <span className={`w-2 h-2 rounded-full ${userData.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium text-gray-800 mb-3">Log Summary</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center p-2 bg-blue-50 rounded">
+                  <span className="text-sm">User activity events:</span>
+                  <span className="font-medium">{activityLogs.length}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-red-50 rounded">
+                  <span className="text-sm">Admin actions:</span>
+                  <span className="font-medium">{adminLogs.length}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-yellow-50 rounded">
+                  <span className="text-sm">System events:</span>
+                  <span className="font-medium">{systemLogs.length}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-green-50 rounded">
+                  <span className="text-sm">Data changes:</span>
+                  <span className="font-medium">{auditLogs.length}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1000,6 +1487,9 @@ const AdminPanel = ({ user }) => {
                 onClick={() => {
                   navigator.clipboard.writeText(tempPassword);
                   alert('Password copied to clipboard!');
+                  logUserEvent('temp_password_copied', 'admin', {
+                    target_user_id: selectedUser?.id
+                  });
                 }}
                 className="flex-1 bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600"
               >
@@ -1010,6 +1500,7 @@ const AdminPanel = ({ user }) => {
                   setShowPasswordModal(false);
                   setTempPassword('');
                   setSelectedUser(null);
+                  logUserEvent('password_reset_modal_closed', 'admin');
                 }}
                 className="flex-1 bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600"
               >
@@ -1019,9 +1510,86 @@ const AdminPanel = ({ user }) => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
 
-      {/* Rest of admin panel tabs (activity logs, admin logs, stats) remain the same */}
-      {/* ... */}
+export default App;
+      {/* Statistics Tab with enhanced info */}
+      {activeAdminTab === 'stats' && (
+        <div className="bg-white rounded-xl p-6 shadow-sm border">
+          <h3 className="font-semibold text-gray-800 mb-4">📈 System Statistics</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="text-center">
+              <p className="text-3xl font-bold text-blue-600">{users.length}</p>
+              <p className="text-sm text-gray-600">Total Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-green-600">
+                {users.filter(u => u.is_active).length}
+              </p>
+              <p className="text-sm text-gray-600">Active Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-red-600">
+                {users.filter(u => !u.is_active).length}
+              </p>
+              <p className="text-sm text-gray-600">Deactivated Users</p>
+            </div>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-purple-600">
+                {users.filter(u => u.is_admin).length}
+              </p>
+              <p className="text-sm text-gray-600">Admins</p>
+            </div>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h4 className="font-medium text-gray-800 mb-3">User Activity Summary</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Users with cycles:</span>
+                  <span className="font-medium">{users.filter(u => u.cycle_count > 0).length}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Total cycles tracked:</span>
+                  <span className="font-medium">{users.reduce((sum, u) => sum + (u.cycle_count || 0), 0)}</span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <span className="text-sm">Average cycles per user:</span>
+                  <span className="font-medium">
+                    {users.length > 0 ? 
+                      (users.reduce((sum, u) => sum + (u.cycle_count || 0), 0) / users.length).toFixed(1) : 
+                      '0'
+                    }
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium text-gray-800 mb-3">Recent Signups</h4>
+              <div className="space-y-2">
+                {users.slice(0, 5).map((userData) => (
+                  <div key={userData.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                    <span className="font-medium text-sm">{userData.username}</span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-sm text-gray-600">
+                        {new Date(userData.signup_date).toLocaleDateString()}
+                      </span>
+                      <span className={`w-2 h-2 rounded-full ${userData.is_active ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Activity and Admin Logs tabs remain the same but will show deactivation logs */}
     </div>
   );
 };
