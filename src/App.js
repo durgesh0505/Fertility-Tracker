@@ -430,76 +430,82 @@ const AppContent = () => {
   };
 
   useEffect(() => {
-    let mounted = true;
+	  let mounted = true;
+	  
+	  const initializeSession = async () => {
+		try {
+		  const { data: { session }, error } = await supabase.auth.getSession();
+		  
+		  if (error) {
+			console.error('Error getting session:', error);
+			if (mounted) {
+			  setSession(null);
+			  setLoading(false);
+			}
+			return;
+		  }
+		  
+		  if (mounted) {
+			setSession(session);
+			if (session) {
+			  await fetchUserProfile(session.user.id);
+			  await logUserEvent('app_accessed', 'auth', {
+				timestamp: new Date().toISOString(),
+				dark_mode: isDarkMode
+			  });
+			  await updateLoginStats(session.user.id);
+			}
+			setLoading(false);
+		  }
+		} catch (error) {
+		  console.error('Session initialization error:', error);
+		  if (mounted) {
+			setSession(null);
+			setLoading(false);
+		  }
+		}
+	  };
 
-    const initializeSession = async () => {
-      try {
-        const {
-          data: {
-            session
-          },
-          error
-        } = await supabase.auth.getSession();
+	  // Add timeout to prevent infinite loading
+	  const timeoutId = setTimeout(() => {
+		if (mounted && loading) {
+		  console.warn('Session initialization timeout');
+		  setSession(null);
+		  setLoading(false);
+		}
+	  }, 10000); // 10 second timeout
 
-        if (error) {
-          console.error('Error getting session:', error);
-          if (mounted) {
-            setLoading(false);
-          }
-          return;
-        }
+	  initializeSession();
 
-        if (mounted) {
-          setSession(session);
-          if (session) {
-            await fetchUserProfile(session.user.id);
-            await logUserEvent('app_accessed', 'auth', {
-              timestamp: new Date().toISOString(),
-              dark_mode: isDarkMode
-            });
-            await updateLoginStats(session.user.id);
-          }
-          setLoading(false);
-        }
-      } catch (error) {
-        console.error('Session initialization error:', error);
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
+	  const {
+		data: { subscription },
+	  } = supabase.auth.onAuthStateChange(async (event, session) => {
+		if (!mounted) return;
+		
+		console.log('Auth state change:', event, session ? 'session exists' : 'no session');
+		
+		setSession(session);
+		setLoading(false); // Always set loading to false on auth state change
+		
+		if (event === 'SIGNED_IN' && session) {
+		  await fetchUserProfile(session.user.id);
+		  await logUserEvent('user_login', 'auth', {
+			login_method: 'email',
+			timestamp: new Date().toISOString()
+		  });
+		  await updateLoginStats(session.user.id);
+		} else if (event === 'SIGNED_OUT') {
+		  setUser(null);
+		  setActiveTab('dashboard');
+		}
+	  });
 
-    initializeSession();
-
-    const {
-      data: {
-        subscription
-      },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return;
-
-      console.log('Auth state change:', event, session ? 'session exists' : 'no session');
-
-      setSession(session);
-
-      if (event === 'SIGNED_IN' && session) {
-        await fetchUserProfile(session.user.id);
-        await logUserEvent('user_login', 'auth', {
-          login_method: 'email',
-          timestamp: new Date().toISOString()
-        });
-        await updateLoginStats(session.user.id);
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setActiveTab('dashboard'); // Reset to default tab
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, [isDarkMode]);
+	  return () => {
+		mounted = false;
+		clearTimeout(timeoutId);
+		subscription.unsubscribe();
+	  };
+	}, [isDarkMode]);
 
   const fetchUserProfile = async (userId) => {
     try {
