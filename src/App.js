@@ -101,7 +101,6 @@ const AuthComponent = ({ logUserEvent }) => {
   const [lastName, setLastName] = useState('');
   const [birthDate, setBirthDate] = useState('');
   const [weight, setWeight] = useState('');
-  const [weightUnit, setWeightUnit] = useState('kg');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -139,15 +138,6 @@ const AuthComponent = ({ logUserEvent }) => {
     return age;
   };
 
-  const convertWeight = (weight, unit) => {
-    if (!weight) return null;
-    const weightNum = parseFloat(weight);
-    if (unit === 'lb') {
-      return (weightNum * 0.453592).toFixed(1);
-    }
-    return weightNum;
-  };
-
   const passwordValidation = validatePassword(password);
 
   const handleAuth = async (e) => {
@@ -182,20 +172,20 @@ const AuthComponent = ({ logUserEvent }) => {
           return;
         }
 
-        const { data: authData, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              first_name: firstName,
-              last_name: lastName,
-              full_name: `${firstName} ${lastName}`,
-              date_of_birth: birthDate,
-              age: age,
-              weight: convertWeight(weight, weightUnit)
-            }
-          }
-        });
+		const { data: authData, error } = await supabase.auth.signUp({
+		  email,
+		  password,
+		  options: {
+			data: {
+			  first_name: firstName,
+			  last_name: lastName,
+			  full_name: `${firstName} ${lastName}`,
+			  date_of_birth: birthDate,
+			  age: age,
+			  weight: weight ? parseFloat(weight) : null // Direct kg value, no conversion
+			}
+		  }
+		});
 
         if (error) throw error;
 
@@ -269,27 +259,18 @@ const AuthComponent = ({ logUserEvent }) => {
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Weight (Optional)</label>
-                <div className="flex space-x-2">
-                  <input
-                    type="number"
-                    value={weight}
-                    onChange={(e) => setWeight(e.target.value)}
-                    placeholder="Enter weight"
-                    className="flex-1 p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    min="1"
-                  />
-                  <select
-                    value={weightUnit}
-                    onChange={(e) => setWeightUnit(e.target.value)}
-                    className="p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="kg">kg</option>
-                    <option value="lb">lb</option>
-                  </select>
-                </div>
-              </div>
+			<div>
+			  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Weight (kg) - Optional</label>
+			  <input
+				type="number"
+				value={weight}
+				onChange={(e) => setWeight(e.target.value)}
+				placeholder="Enter weight in kg"
+				className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+				min="1"
+				step="0.1"
+			  />
+			</div>
 
               <div className="border-t border-gray-200 dark:border-gray-600 my-4"></div>
             </>
