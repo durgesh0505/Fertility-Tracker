@@ -242,22 +242,23 @@ const AuthComponent = ({ logUserEvent }) => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Birth Date *</label>
-                <input
-                  type="date"
-                  value={birthDate}
-                  onChange={(e) => setBirthDate(e.target.value)}
-                  max={new Date().toISOString().split('T')[0]}
-                  className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  required
-                />
-                {birthDate && (
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Age: {calculateAge(birthDate)} years
-                  </p>
-                )}
-              </div>
+				<div>
+				  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Birth Date *</label>
+				  <input
+					type="date"
+					value={birthDate}
+					onChange={(e) => setBirthDate(e.target.value)}
+					min="1920-01-01"
+					max={new Date().toISOString().split('T')[0]}
+					className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+					required
+				  />
+				  {birthDate && (
+					<p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+					  Age: {calculateAge(birthDate)} years
+					</p>
+				  )}
+				</div>
 
 			<div>
 			  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Weight (kg) - Optional</label>
@@ -2325,7 +2326,7 @@ ${cycles.slice(0, 10).map(cycle =>
 	  
 	// Auto-fill end date when start date changes
 	useEffect(() => {
-	  if (newPeriod.startDate && !newPeriod.endDate) {
+	  if (newPeriod.startDate) {
 		const startDate = new Date(newPeriod.startDate);
 		const typicalLength = user?.typical_period_length || 5;
 		const endDate = new Date(startDate);
@@ -2334,6 +2335,12 @@ ${cycles.slice(0, 10).map(cycle =>
 		setNewPeriod(prev => ({
 		  ...prev,
 		  endDate: endDate.toISOString().split('T')[0]
+		}));
+	  } else {
+		// Clear end date if start date is cleared
+		setNewPeriod(prev => ({
+		  ...prev,
+		  endDate: ''
 		}));
 	  }
 	}, [newPeriod.startDate, user?.typical_period_length]);
@@ -2356,43 +2363,33 @@ ${cycles.slice(0, 10).map(cycle =>
 
         <
         div className = "grid grid-cols-1 md:grid-cols-3 gap-4 mb-4" >
-        <
-        div >
-        <
-        label className = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" > Start Date < /label> <
-        input type = "date"
-        value = {
-          newPeriod.startDate
-        }
-        onChange = {
-          (e) => setNewPeriod(prev => ({
-            ...prev,
-            startDate: e.target.value
-          }))
-        }
-        className = "w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white" /
-        >
-        <
-        /div>
+        
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Start Date</label>
+		  <input
+			type="date"
+			value={newPeriod.startDate}
+			onChange={(e) => setNewPeriod(prev => ({ ...prev, startDate: e.target.value }))}
+			min="2020-01-01"
+			max="2050-12-31"
+			className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+		  />
+		</div>
 
-        <
-        div >
-        <
-        label className = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" > End Date(Optional) < /label> <
-        input type = "date"
-        value = {
-          newPeriod.endDate
-        }
-        onChange = {
-          (e) => setNewPeriod(prev => ({
-            ...prev,
-            endDate: e.target.value
-          }))
-        }
-        className = "w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white" /
-        >
-        <
-        /div>
+		<div>
+		  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">End Date (Auto-filled)</label>
+		  <input
+			type="date"
+			value={newPeriod.endDate}
+			onChange={(e) => setNewPeriod(prev => ({ ...prev, endDate: e.target.value }))}
+			min="2020-01-01"
+			max="2050-12-31"
+			className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+		  />
+		  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+			Auto-filled based on your typical period length ({user?.typical_period_length || 5} days)
+		  </p>
+		</div>
 
         <
         div >
@@ -2687,7 +2684,7 @@ const PregnancyPlanner = ({
       (e) => setTargetYear(e.target.value)
     }
     className = "w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white" > {
-      [2025, 2026, 2027, 2028, 2029, 2030].map(year => ( <
+      [2025, 2026, 2027, 2028, 2029, 2050].map(year => ( <
         option key = {
           year
         }
