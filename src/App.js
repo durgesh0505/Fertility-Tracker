@@ -394,9 +394,7 @@ const AppContent = () => {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
-  const {
-    isDarkMode
-  } = useTheme();
+  const { isDarkMode } = useTheme();
 
   // COMPREHENSIVE LOGGING UTILITY FUNCTIONS
   const logUserEvent = async (action, category = 'general', details = {}) => {
@@ -413,9 +411,7 @@ const AppContent = () => {
 
   const updateLoginStats = async (userId) => {
     try {
-      const {
-        error
-      } = await supabase
+      const { error } = await supabase
         .from('user_profiles')
         .update({
           last_login_at: new Date().toISOString(),
@@ -429,185 +425,196 @@ const AppContent = () => {
     }
   };
 
+  const fetchUserProfile = async (userId) => {
+    try {
+      console.log('Fetching profile for user:', userId);
+      
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        
+        if (error.code === 'PGRST116') {
+          // Profile doesn't exist - create a basic one
+          console.log('Profile not found, creating basic profile...');
+          try {
+            const { data: userData } = await supabase.auth.getUser();
+            const email = userData?.user?.email;
+            
+            const { data: newProfile, error: createError } = await supabase
+              .from('user_profiles')
+              .insert({
+                id: userId,
+                username: email ? email.split('@')[0] : 'user',
+                full_name: '',
+                is_admin: false,
+                is_active: true
+              })
+              .select()
+              .single();
+              
+            if (createError) {
+              console.error('Error creating profile:', createError);
+              return; // Don't sign out, just return
+            }
+            
+            setUser(newProfile);
+            return;
+          } catch (createErr) {
+            console.error('Failed to create profile:', createErr);
+            return; // Don't sign out
+          }
+        }
+        
+        // For other errors, don't sign out immediately
+        console.error('Profile fetch error, but not signing out:', error);
+        return;
+      }
+
+      if (data) {
+        if (data.is_active === false) {
+          alert('Your account has been deactivated. Please contact support.');
+          await supabase.auth.signOut();
+          return;
+        }
+
+        console.log('Profile loaded successfully:', data.username);
+        setUser(data);
+        
+        if (data.password_reset_required) {
+          setShowPasswordChangeModal(true);
+        }
+      }
+    } catch (error) {
+      console.error('Unexpected error in fetchUserProfile:', error);
+      // Don't sign out on unexpected errors
+    }
+  };
+
   useEffect(() => {
-	  let mounted = true;
-	  
-	  const initializeSession = async () => {
-		try {
-		  const { data: { session }, error } = await supabase.auth.getSession();
-		  
-		  if (error) {
-			console.error('Error getting session:', error);
-			if (mounted) {
-			  setSession(null);
-			  setLoading(false);
-			}
-			return;
-		  }
-		  
-		  if (mounted) {
-			setSession(session);
-			if (session) {
-			  await fetchUserProfile(session.user.id);
-			  await logUserEvent('app_accessed', 'auth', {
-				timestamp: new Date().toISOString(),
-				dark_mode: isDarkMode
-			  });
-			  await updateLoginStats(session.user.id);
-			}
-			setLoading(false);
-		  }
-		} catch (error) {
-		  console.error('Session initialization error:', error);
-		  if (mounted) {
-			setSession(null);
-			setLoading(false);
-		  }
-		}
-	  };
+    let mounted = true;
+    
+    const initializeSession = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('Error getting session:', error);
+          if (mounted) {
+            setSession(null);
+            setLoading(false);
+          }
+          return;
+        }
+        
+        if (mounted) {
+          setSession(session);
+          if (session) {
+            // Don't await profile fetch to prevent blocking
+            fetchUserProfile(session.user.id).catch(err => {
+              console.error('Profile fetch failed:', err);
+              // Don't sign out immediately, just set loading to false
+              setLoading(false);
+            });
+            
+            logUserEvent('app_accessed', 'auth', {
+              timestamp: new Date().toISOString(),
+              dark_mode: isDarkMode
+            }).catch(err => console.error('Logging failed:', err));
+            
+            updateLoginStats(session.user.id).catch(err => console.error('Login stats update failed:', err));
+          }
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Session initialization error:', error);
+        if (mounted) {
+          setSession(null);
+          setLoading(false);
+        }
+      }
+    };
 
-	  // Add timeout to prevent infinite loading
-	  const timeoutId = setTimeout(() => {
-		if (mounted && loading) {
-		  console.warn('Session initialization timeout');
-		  setSession(null);
-		  setLoading(false);
-		}
-	  }, 10000); // 10 second timeout
+    // Add timeout to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn('Session initialization timeout');
+        setLoading(false);
+      }
+    }, 5000); // 5 second timeout
 
-	  initializeSession();
+    initializeSession();
 
-	  const {
-		data: { subscription },
-	  } = supabase.auth.onAuthStateChange(async (event, session) => {
-		if (!mounted) return;
-		
-		console.log('Auth state change:', event, session ? 'session exists' : 'no session');
-		
-		setSession(session);
-		setLoading(false); // Always set loading to false on auth state change
-		
-		if (event === 'SIGNED_IN' && session) {
-		  await fetchUserProfile(session.user.id);
-		  await logUserEvent('user_login', 'auth', {
-			login_method: 'email',
-			timestamp: new Date().toISOString()
-		  });
-		  await updateLoginStats(session.user.id);
-		} else if (event === 'SIGNED_OUT') {
-		  setUser(null);
-		  setActiveTab('dashboard');
-		}
-	  });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      
+      console.log('Auth state change:', event, session ? 'session exists' : 'no session');
+      
+      setSession(session);
+      setLoading(false); // Always set loading to false
+      
+      if (event === 'SIGNED_IN' && session) {
+        // Don't await these to prevent blocking
+        fetchUserProfile(session.user.id).catch(err => console.error('Profile fetch failed:', err));
+        logUserEvent('user_login', 'auth', {
+          login_method: 'email',
+          timestamp: new Date().toISOString()
+        }).catch(err => console.error('Logging failed:', err));
+        updateLoginStats(session.user.id).catch(err => console.error('Login stats failed:', err));
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setActiveTab('dashboard');
+      }
+    });
 
-	  return () => {
-		mounted = false;
-		clearTimeout(timeoutId);
-		subscription.unsubscribe();
-	  };
-	}, [isDarkMode]);
-
-	const fetchUserProfile = async (userId) => {
-	  try {
-		const { data, error } = await supabase
-		  .from('user_profiles')
-		  .select('*')
-		  .eq('id', userId)
-		  .single();
-
-		if (error) {
-		  console.error('Error fetching profile:', error);
-		  if (error.code === 'PGRST116') {
-			console.log('Profile not found, user may need to complete signup');
-			await supabase.auth.signOut();
-			return;
-		  }
-		  throw error;
-		}
-
-		if (data) {
-		  if (data.is_active === false) {
-			alert('Your account has been deactivated. Please contact support.');
-			await supabase.auth.signOut();
-			return;
-		  }
-
-		  setUser(data);
-		  
-		  if (data.password_reset_required) {
-			setShowPasswordChangeModal(true);
-		  }
-		} else {
-		  console.error('No profile data returned');
-		  await supabase.auth.signOut();
-		}
-	  } catch (error) {
-		console.error('Error in fetchUserProfile:', error);
-		await supabase.auth.signOut();
-	  }
-	};
+    return () => {
+      mounted = false;
+      clearTimeout(timeoutId);
+      subscription.unsubscribe();
+    };
+  }, [isDarkMode]);
 
   if (loading) {
-    return ( <
-      div className = "min-h-screen bg-gradient-to-br from-pink-50 to-purple-50 dark:from-gray-900 dark:to-purple-900 flex items-center justify-center" >
-      <
-      div className = "text-center" >
-      <
-      Heart className = "mx-auto text-pink-500 mb-4 animate-pulse"
-      size = {
-        48
-      }
-      /> <
-      p className = "text-gray-600 dark:text-gray-300" > Loading... < /p> < /
-      div > <
-      /div>
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-pink-50 to-purple-50 dark:from-gray-900 dark:to-purple-900 flex items-center justify-center">
+        <div className="text-center">
+          <Heart className="mx-auto text-pink-500 mb-4 animate-pulse" size={48} />
+          <p className="text-gray-600 dark:text-gray-300">Loading...</p>
+        </div>
+      </div>
     );
   }
 
   if (!session) {
-    return < AuthComponent logUserEvent = {
-      logUserEvent
-    }
-    />;
+    return <AuthComponent logUserEvent={logUserEvent} />;
   }
 
-  return ( <
-      >
-      <
-      MainApp user = {
-        user
-      }
-      setUser = {
-        setUser
-      }
-      logUserEvent = {
-        logUserEvent
-      }
-      activeTab = {
-        activeTab
-      }
-      setActiveTab = {
-        setActiveTab
-      }
-      /> {
-      showPasswordChangeModal && ( <
-        PasswordChangeModal user = {
-          user
-        }
-        setUser = {
-          setUser
-        }
-        onClose = {
-          () => setShowPasswordChangeModal(false)
-        }
-        logUserEvent = {
-          logUserEvent
-        }
+  return (
+    <>
+      <MainApp 
+        user={user} 
+        setUser={setUser} 
+        logUserEvent={logUserEvent}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        session={session}
+      />
+      {showPasswordChangeModal && (
+        <PasswordChangeModal 
+          user={user} 
+          setUser={setUser}
+          onClose={() => setShowPasswordChangeModal(false)}
+          logUserEvent={logUserEvent}
         />
-      )
-    } <
-    />
-);
+      )}
+    </>
+  );
 };
 
 const PasswordChangeModal = ({
@@ -800,60 +807,89 @@ const PasswordChangeModal = ({
   );
 };
 
-const MainApp = ({
-  user,
-  setUser,
-  logUserEvent,
-  activeTab,
-  setActiveTab
-}) => {
+const MainApp = ({ user, setUser, logUserEvent, activeTab, setActiveTab, session }) => {
   const [cycles, setCycles] = useState([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const {
-    isDarkMode,
-    toggleDarkMode
-  } = useTheme();
+  const { isDarkMode, toggleDarkMode } = useTheme();
 
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       fetchCycles();
     }
   }, [user]);
 
-	const fetchCycles = async () => {
-	  try {
-		if (!user?.id) {
-		  console.error('No user ID available for fetching cycles');
-		  return;
-		}
+  // Emergency profile creation if session exists but no user profile
+  useEffect(() => {
+    if (session && !user) {
+      const timer = setTimeout(async () => {
+        console.log('No profile found after 3 seconds, attempting to create...');
+        try {
+          const { data: userData } = await supabase.auth.getUser();
+          const email = userData?.user?.email;
+          
+          if (email) {
+            const { data: newProfile, error } = await supabase
+              .from('user_profiles')
+              .insert({
+                id: session.user.id,
+                username: email.split('@')[0],
+                full_name: '',
+                is_admin: false,
+                is_active: true
+              })
+              .select()
+              .single();
+              
+            if (!error && newProfile) {
+              setUser(newProfile);
+              console.log('Emergency profile created successfully');
+            }
+          }
+        } catch (err) {
+          console.error('Emergency profile creation failed:', err);
+        }
+      }, 3000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [session, user, setUser]);
 
-		const { data, error } = await supabase
-		  .from('cycles')
-		  .select('*')
-		  .eq('user_id', user.id)
-		  .order('start_date', { ascending: false });
+  const fetchCycles = async () => {
+    try {
+      if (!user?.id) {
+        console.error('No user ID available for fetching cycles');
+        return;
+      }
 
-		if (error) throw error;
-		setCycles(data || []);
-	  } catch (error) {
-		console.error('Error fetching cycles:', error);
-		setCycles([]);
-	  }
-	};
+      const { data, error } = await supabase
+        .from('cycles')
+        .select('*')
+        .eq('user_id', user.id) // CRITICAL: Filter by user_id
+        .order('start_date', { ascending: false });
+
+      if (error) throw error;
+      setCycles(data || []);
+    } catch (error) {
+      console.error('Error fetching cycles:', error);
+      setCycles([]);
+    }
+  };
 
   const handleSignOut = async () => {
-    await logUserEvent('user_logout', 'auth');
-    const {
-      error
-    } = await supabase.auth.signOut();
-    if (error) console.error('Error signing out:', error);
+    try {
+      await logUserEvent('user_logout', 'auth');
+      const { error } = await supabase.auth.signOut();
+      if (error) console.error('Error signing out:', error);
+    } catch (error) {
+      console.error('Sign out error:', error);
+      // Force sign out even if logging fails
+      await supabase.auth.signOut();
+    }
   };
 
   const exportData = async (format = 'csv') => {
     try {
-      await logUserEvent('data_export_initiated', 'general', {
-        format
-      });
+      await logUserEvent('data_export_initiated', 'general', { format });
 
       if (format === 'csv') {
         // Create CSV content
@@ -871,9 +907,7 @@ const MainApp = ({
         ].join('\n');
 
         // Download CSV
-        const blob = new Blob([csvContent], {
-          type: 'text/csv'
-        });
+        const blob = new Blob([csvContent], { type: 'text/csv' });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -883,21 +917,18 @@ const MainApp = ({
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
 
-        await logUserEvent('data_export_completed', 'general', {
-          format: 'csv',
-          cycles_count: cycles.length
-        });
+        await logUserEvent('data_export_completed', 'general', { format: 'csv', cycles_count: cycles.length });
       } else if (format === 'pdf') {
         // Simple PDF report
         const reportContent = `
 FERTILITY TRACKER REPORT
 Generated: ${new Date().toLocaleDateString()}
-User: ${user.full_name || user.username}
+User: ${user?.full_name || user?.username}
 
 CYCLE SUMMARY:
 - Total cycles tracked: ${cycles.length}
-- Average cycle length: ${user.typical_cycle_length} days
-- Average period length: ${user.typical_period_length} days
+- Average cycle length: ${user?.typical_cycle_length} days
+- Average period length: ${user?.typical_period_length} days
 
 RECENT CYCLES:
 ${cycles.slice(0, 10).map(cycle => 
@@ -905,9 +936,7 @@ ${cycles.slice(0, 10).map(cycle =>
 ).join('\n')}
         `;
 
-        const blob = new Blob([reportContent], {
-          type: 'text/plain'
-        });
+        const blob = new Blob([reportContent], { type: 'text/plain' });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -917,333 +946,188 @@ ${cycles.slice(0, 10).map(cycle =>
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
 
-        await logUserEvent('data_export_completed', 'general', {
-          format: 'pdf',
-          cycles_count: cycles.length
-        });
+        await logUserEvent('data_export_completed', 'general', { format: 'pdf', cycles_count: cycles.length });
       }
     } catch (error) {
       console.error('Error exporting data:', error);
-      await logUserEvent('data_export_failed', 'general', {
-        format,
-        error: error.message
-      });
+      await logUserEvent('data_export_failed', 'general', { format, error: error.message });
       alert('Error exporting data. Please try again.');
     }
   };
 
-  const tabs = [{
-      id: 'dashboard',
-      label: 'Dashboard',
-      icon: TrendingUp
-    },
-    {
-      id: 'analytics',
-      label: 'Analytics',
-      icon: BarChart3
-    },
-    {
-      id: 'periods',
-      label: 'Period Tracker',
-      icon: Calendar
-    },
-    {
-      id: 'pregnancy',
-      label: 'Pregnancy Planner',
-      icon: Baby
-    },
-    {
-      id: 'profile',
-      label: 'Profile',
-      icon: User
-    }
+  const tabs = [
+    { id: 'dashboard', label: 'Dashboard', icon: TrendingUp },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { id: 'periods', label: 'Period Tracker', icon: Calendar },
+    { id: 'pregnancy', label: 'Pregnancy Planner', icon: Baby },
+    { id: 'profile', label: 'Profile', icon: User }
   ];
 
   if (user?.is_admin) {
-    tabs.push({
-      id: 'admin',
-      label: 'Admin Panel',
-      icon: Lock
-    });
+    tabs.push({ id: 'admin', label: 'Admin Panel', icon: Lock });
   }
 
-  return ( <
-    div className = "min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors" > {
-      /* Mobile-First Header */
-    } <
-    nav className = "bg-white dark:bg-gray-800 shadow-sm border-b dark:border-gray-700 sticky top-0 z-40" >
-    <
-    div className = "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" >
-    <
-    div className = "flex justify-between items-center py-4" >
-    <
-    div className = "flex items-center space-x-3" >
-    <
-    Heart className = "text-pink-500"
-    size = {
-      32
-    }
-    /> <
-    div >
-    <
-    h1 className = "text-xl font-bold text-gray-800 dark:text-white" > Fertility Tracker < /h1> <
-    p className = "text-xs text-gray-500 dark:text-gray-400 hidden sm:block" >
-    Welcome, {
-      user?.full_name || user?.username
-    } <
-    /p> < /
-    div > <
-    /div>
+  // Show loading state if we have session but no user yet
+  if (session && !user) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <Heart className="mx-auto text-pink-500 mb-4 animate-pulse" size={48} />
+          <p className="text-gray-600 dark:text-gray-300">Setting up your profile...</p>
+        </div>
+      </div>
+    );
+  }
 
-    <
-    div className = "flex items-center space-x-2" > {
-      /* Export Button */
-    } <
-    div className = "relative group" >
-    <
-    button className = "bg-blue-500 text-white px-3 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm flex items-center space-x-1" >
-    <
-    Download size = {
-      16
-    }
-    /> <
-    span className = "hidden sm:inline" > Export < /span> <
-    ChevronDown size = {
-      14
-    }
-    /> < /
-    button > <
-    div className = "absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border dark:border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50" >
-    <
-    button onClick = {
-      () => exportData('csv')
-    }
-    className = "block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-t-lg" >
-    Export as CSV <
-    /button> <
-    button onClick = {
-      () => exportData('pdf')
-    }
-    className = "block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-b-lg" >
-    Export Report <
-    /button> < /
-    div > <
-    /div>
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+      {/* Mobile-First Header */}
+      <nav className="bg-white dark:bg-gray-800 shadow-sm border-b dark:border-gray-700 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center space-x-3">
+              <Heart className="text-pink-500" size={32} />
+              <div>
+                <h1 className="text-xl font-bold text-gray-800 dark:text-white">Fertility Tracker</h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400 hidden sm:block">
+                  Welcome, {user?.full_name || user?.username || 'User'}
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              {/* Export Button */}
+              <div className="relative group">
+                <button className="bg-blue-500 text-white px-3 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm flex items-center space-x-1">
+                  <Download size={16} />
+                  <span className="hidden sm:inline">Export</span>
+                  <ChevronDown size={14} />
+                </button>
+                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border dark:border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                  <button
+                    onClick={() => exportData('csv')}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-t-lg"
+                  >
+                    Export as CSV
+                  </button>
+                  <button
+                    onClick={() => exportData('pdf')}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-b-lg"
+                  >
+                    Export Report
+                  </button>
+                </div>
+              </div>
 
-    {
-      /* Dark Mode Toggle */
-    } <
-    button onClick = {
-      toggleDarkMode
-    }
-    className = "p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors" > {
-      isDarkMode ? < Sun size = {
-        20
-      }
-      /> : <Moon size={20} / >
-    } <
-    /button>
+              {/* Dark Mode Toggle */}
+              <button
+                onClick={toggleDarkMode}
+                className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              >
+                {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
 
-    {
-      /* User Info & Logout */
-    } <
-    div className = "flex items-center space-x-2" >
-    <
-    div className = "hidden sm:flex items-center space-x-2" > {
-      user?.is_admin && ( <
-        span className = "bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200 text-xs px-2 py-1 rounded font-medium" > 👑Admin <
-        /span>
-      )
-    } <
-    /div> <
-    button onClick = {
-      handleSignOut
-    }
-    className = "bg-red-500 text-white px-3 py-2 rounded-lg hover:bg-red-600 transition-colors text-sm flex items-center space-x-1" >
-    <
-    LogOut size = {
-      16
-    }
-    /> <
-    span className = "hidden sm:inline" > Logout < /span> < /
-    button > <
-    /div>
+              {/* User Info & Logout */}
+              <div className="flex items-center space-x-2">
+                <div className="hidden sm:flex items-center space-x-2">
+                  {user?.is_admin && (
+                    <span className="bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200 text-xs px-2 py-1 rounded font-medium">
+                      👑 Admin
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  className="bg-red-500 text-white px-3 py-2 rounded-lg hover:bg-red-600 transition-colors text-sm flex items-center space-x-1"
+                >
+                  <LogOut size={16} />
+                  <span className="hidden sm:inline">Logout</span>
+                </button>
+              </div>
 
-    {
-      /* Mobile Menu Button */
-    } <
-    button onClick = {
-      () => setIsMobileMenuOpen(!isMobileMenuOpen)
-    }
-    className = "lg:hidden p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300" >
-    <
-    Smartphone size = {
-      20
-    }
-    /> < /
-    button > <
-    /div> < /
-    div > <
-    /div> < /
-    nav >
+              {/* Mobile Menu Button */}
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="lg:hidden p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+              >
+                <Smartphone size={20} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
 
-    <
-    div className = "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" >
-    <
-    div className = "flex flex-col lg:flex-row gap-8" > {
-      /* Mobile Navigation */
-    } <
-    div className = {
-      `lg:hidden ${isMobileMenuOpen ? 'block' : 'hidden'} mb-6`
-    } >
-    <
-    nav className = "bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4" >
-    <
-    div className = "grid grid-cols-2 sm:grid-cols-3 gap-2" > {
-      tabs.map(tab => {
-        const Icon = tab.icon;
-        return ( <
-          button key = {
-            tab.id
-          }
-          onClick = {
-            () => {
-              setActiveTab(tab.id);
-              setIsMobileMenuOpen(false);
-              logUserEvent('tab_changed', 'navigation', {
-                tab: tab.id
-              });
-            }
-          }
-          className = {
-            `flex flex-col items-center space-y-1 px-3 py-3 rounded-lg text-center transition-colors ${
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col lg:flex-row gap-8">
+          {/* Mobile Navigation */}
+          <div className={`lg:hidden ${isMobileMenuOpen ? 'block' : 'hidden'} mb-6`}>
+            <nav className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {tabs.map(tab => {
+                  const Icon = tab.icon;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => {
+                        setActiveTab(tab.id);
+                        setIsMobileMenuOpen(false);
+                        logUserEvent('tab_changed', 'navigation', { tab: tab.id });
+                      }}
+                      className={`flex flex-col items-center space-y-1 px-3 py-3 rounded-lg text-center transition-colors ${
                         activeTab === tab.id
                           ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
                           : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                      }`
-          } >
-          <
-          Icon size = {
-            20
-          }
-          /> <
-          span className = "text-xs font-medium" > {
-            tab.label
-          } < /span> < /
-          button >
-        );
-      })
-    } <
-    /div> < /
-    nav > <
-    /div>
+                      }`}
+                    >
+                      <Icon size={20} />
+                      <span className="text-xs font-medium">{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+          </div>
 
-    {
-      /* Desktop Sidebar */
-    } <
-    div className = "hidden lg:block lg:w-64" >
-    <
-    nav className = "space-y-2 sticky top-24" > {
-      tabs.map(tab => {
-        const Icon = tab.icon;
-        return ( <
-          button key = {
-            tab.id
-          }
-          onClick = {
-            () => {
-              setActiveTab(tab.id);
-              logUserEvent('tab_changed', 'navigation', {
-                tab: tab.id
-              });
-            }
-          }
-          className = {
-            `w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-colors ${
+          {/* Desktop Sidebar */}
+          <div className="hidden lg:block lg:w-64">
+            <nav className="space-y-2 sticky top-24">
+              {tabs.map(tab => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      logUserEvent('tab_changed', 'navigation', { tab: tab.id });
+                    }}
+                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-colors ${
                       activeTab === tab.id
                         ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
                         : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`
-          } >
-          <
-          Icon size = {
-            20
-          }
-          /> <
-          span className = "font-medium" > {
-            tab.label
-          } < /span> < /
-          button >
-        );
-      })
-    } <
-    /nav> < /
-    div >
+                    }`}
+                  >
+                    <Icon size={20} />
+                    <span className="font-medium">{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
 
-    {
-      /* Main Content */
-    } <
-    div className = "flex-1" > {
-      activeTab === 'dashboard' && < Dashboard user = {
-        user
-      }
-      cycles = {
-        cycles
-      }
-      />} {
-      activeTab === 'analytics' && < AdvancedAnalytics user = {
-        user
-      }
-      cycles = {
-        cycles
-      }
-      />} {
-      activeTab === 'periods' && < PeriodTracker user = {
-        user
-      }
-      cycles = {
-        cycles
-      }
-      setCycles = {
-        setCycles
-      }
-      fetchCycles = {
-        fetchCycles
-      }
-      logUserEvent = {
-        logUserEvent
-      }
-      />} {
-      activeTab === 'pregnancy' && < PregnancyPlanner user = {
-        user
-      }
-      cycles = {
-        cycles
-      }
-      />} {
-      activeTab === 'profile' && < Profile user = {
-        user
-      }
-      setUser = {
-        setUser
-      }
-      logUserEvent = {
-        logUserEvent
-      }
-      />} {
-      activeTab === 'admin' && user?.is_admin && < AdminPanel user = {
-        user
-      }
-      logUserEvent = {
-        logUserEvent
-      }
-      />} < /
-      div > <
-      /div> < /
-      div > <
-      /div>
-    );
-  };
+          {/* Main Content */}
+          <div className="flex-1">
+            {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
+            {activeTab === 'analytics' && <AdvancedAnalytics user={user} cycles={cycles} />}
+            {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logUserEvent={logUserEvent} />}
+            {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
+            {activeTab === 'profile' && <Profile user={user} setUser={setUser} logUserEvent={logUserEvent} />}
+            {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} logUserEvent={logUserEvent} />}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
   // ENHANCED DASHBOARD WITH BETTER PREDICTIONS
   const Dashboard = ({
