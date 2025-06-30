@@ -507,39 +507,45 @@ const AppContent = () => {
 	  };
 	}, [isDarkMode]);
 
-  const fetchUserProfile = async (userId) => {
-    try {
-      const {
-        data,
-        error
-      } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+	const fetchUserProfile = async (userId) => {
+	  try {
+		const { data, error } = await supabase
+		  .from('user_profiles')
+		  .select('*')
+		  .eq('id', userId)
+		  .single();
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error fetching profile:', error);
-        return;
-      }
+		if (error) {
+		  console.error('Error fetching profile:', error);
+		  if (error.code === 'PGRST116') {
+			console.log('Profile not found, user may need to complete signup');
+			await supabase.auth.signOut();
+			return;
+		  }
+		  throw error;
+		}
 
-      if (data) {
-        if (!data.is_active) {
-          alert('Your account has been deactivated. Please contact support.');
-          await supabase.auth.signOut();
-          return;
-        }
+		if (data) {
+		  if (data.is_active === false) {
+			alert('Your account has been deactivated. Please contact support.');
+			await supabase.auth.signOut();
+			return;
+		  }
 
-        setUser(data);
-
-        if (data.password_reset_required) {
-          setShowPasswordChangeModal(true);
-        }
-      }
-    } catch (error) {
-      console.error('Error:', error);
-    }
-  };
+		  setUser(data);
+		  
+		  if (data.password_reset_required) {
+			setShowPasswordChangeModal(true);
+		  }
+		} else {
+		  console.error('No profile data returned');
+		  await supabase.auth.signOut();
+		}
+	  } catch (error) {
+		console.error('Error in fetchUserProfile:', error);
+		await supabase.auth.signOut();
+	  }
+	};
 
   if (loading) {
     return ( <
@@ -814,24 +820,26 @@ const MainApp = ({
     }
   }, [user]);
 
-  const fetchCycles = async () => {
-    try {
-      const {
-        data,
-        error
-      } = await supabase
-        .from('cycles')
-        .select('*')
-        .order('start_date', {
-          ascending: false
-        });
+	const fetchCycles = async () => {
+	  try {
+		if (!user?.id) {
+		  console.error('No user ID available for fetching cycles');
+		  return;
+		}
 
-      if (error) throw error;
-      setCycles(data || []);
-    } catch (error) {
-      console.error('Error fetching cycles:', error);
-    }
-  };
+		const { data, error } = await supabase
+		  .from('cycles')
+		  .select('*')
+		  .eq('user_id', user.id)
+		  .order('start_date', { ascending: false });
+
+		if (error) throw error;
+		setCycles(data || []);
+	  } catch (error) {
+		console.error('Error fetching cycles:', error);
+		setCycles([]);
+	  }
+	};
 
   const handleSignOut = async () => {
     await logUserEvent('user_logout', 'auth');
@@ -2449,6 +2457,21 @@ ${cycles.slice(0, 10).map(cycle =>
             prev.symptoms.filter(s => s !== symptom) : [...prev.symptoms, symptom]
         }));
       };
+	  
+	// Auto-fill end date when start date changes
+	useEffect(() => {
+	  if (newPeriod.startDate && !newPeriod.endDate) {
+		const startDate = new Date(newPeriod.startDate);
+		const typicalLength = user?.typical_period_length || 5;
+		const endDate = new Date(startDate);
+		endDate.setDate(startDate.getDate() + typicalLength - 1);
+		
+		setNewPeriod(prev => ({
+		  ...prev,
+		  endDate: endDate.toISOString().split('T')[0]
+		}));
+	  }
+	}, [newPeriod.startDate, user?.typical_period_length]);
 
       return ( <
         div className = "space-y-6" >
