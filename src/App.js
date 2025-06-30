@@ -1,8 +1,6 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from './supabaseClient';
 import { Calendar, Heart, Baby, User, Lock, TrendingUp, Clock, Target, Trash2, LogOut, UserX, UserCheck, Activity, Shield, Database, AlertTriangle, Moon, Sun, Download, BarChart3, PieChart, LineChart, Smartphone, ChevronDown, Filter, Search, X } from 'lucide-react';
-import ErrorBoundary from './ErrorBoundary';
 
 // Dark Mode Context
 const ThemeContext = createContext();
@@ -44,9 +42,7 @@ const useTheme = () => {
 const App = () => {
   return (
     <ThemeProvider>
-      <Router>
-        <AppContent />
-      </Router>
+      <AppContent />
     </ThemeProvider>
   );
 };
@@ -55,10 +51,9 @@ const AppContent = () => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const { isDarkMode } = useTheme();
-  const navigate = useNavigate();
-  const location = useLocation();
 
   // COMPREHENSIVE LOGGING UTILITY FUNCTIONS
   const logUserEvent = async (action, category = 'general', details = {}) => {
@@ -90,22 +85,49 @@ const AppContent = () => {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        fetchUserProfile(session.user.id);
-        logUserEvent('app_accessed', 'auth', {
-          timestamp: new Date().toISOString(),
-          dark_mode: isDarkMode
-        });
-        updateLoginStats(session.user.id);
+    let mounted = true;
+    
+    const initializeSession = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('Error getting session:', error);
+          if (mounted) {
+            setLoading(false);
+          }
+          return;
+        }
+        
+        if (mounted) {
+          setSession(session);
+          if (session) {
+            await fetchUserProfile(session.user.id);
+            await logUserEvent('app_accessed', 'auth', {
+              timestamp: new Date().toISOString(),
+              dark_mode: isDarkMode
+            });
+            await updateLoginStats(session.user.id);
+          }
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Session initialization error:', error);
+        if (mounted) {
+          setLoading(false);
+        }
       }
-      setLoading(false);
-    });
+    };
+
+    initializeSession();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      
+      console.log('Auth state change:', event, session ? 'session exists' : 'no session');
+      
       setSession(session);
       
       if (event === 'SIGNED_IN' && session) {
@@ -115,15 +137,17 @@ const AppContent = () => {
           timestamp: new Date().toISOString()
         });
         await updateLoginStats(session.user.id);
-        navigate('/dashboard');
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
-        navigate('/');
+        setActiveTab('dashboard'); // Reset to default tab
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [isDarkMode, navigate]);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [isDarkMode]);
 
   const fetchUserProfile = async (userId) => {
     try {
@@ -167,41 +191,19 @@ const AppContent = () => {
     );
   }
 
+  if (!session) {
+    return <AuthComponent logUserEvent={logUserEvent} />;
+  }
+
   return (
     <>
-      <Routes>
-        <Route 
-          path="/" 
-          element={!session ? <AuthComponent logUserEvent={logUserEvent} /> : <Navigate to="/dashboard" replace />} 
-        />
-        <Route 
-          path="/dashboard" 
-          element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} /> : <Navigate to="/" replace />} 
-        />
-        <Route 
-          path="/analytics" 
-          element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} activeTab="analytics" /> : <Navigate to="/" replace />} 
-        />
-        <Route 
-          path="/periods" 
-          element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} activeTab="periods" /> : <Navigate to="/" replace />} 
-        />
-        <Route 
-          path="/pregnancy" 
-          element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} activeTab="pregnancy" /> : <Navigate to="/" replace />} 
-        />
-        <Route 
-          path="/profile" 
-          element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} activeTab="profile" /> : <Navigate to="/" replace />} 
-        />
-        {user?.is_admin && (
-          <Route 
-            path="/admin" 
-            element={session ? <MainApp user={user} setUser={setUser} logUserEvent={logUserEvent} activeTab="admin" /> : <Navigate to="/" replace />} 
-          />
-        )}
-        <Route path="*" element={<Navigate to={session ? "/dashboard" : "/"} replace />} />
-      </Routes>
+      <MainApp 
+        user={user} 
+        setUser={setUser} 
+        logUserEvent={logUserEvent}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+      />
       {showPasswordChangeModal && (
         <PasswordChangeModal 
           user={user} 
@@ -214,26 +216,286 @@ const AppContent = () => {
   );
 };
 
-// Update MainApp to use navigation
-const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
+const PasswordChangeModal = ({ user, setUser, onClose, logUserEvent }) => {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const validatePassword = (password) => {
+    const minLength = password.length >= 8;
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    
+    return {
+      minLength,
+      hasUppercase,
+      hasLowercase,
+      hasNumber,
+      hasSymbol,
+      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
+    };
+  };
+
+  const passwordValidation = validatePassword(newPassword);
+
+  const handlePasswordChange = async () => {
+    if (!passwordValidation.isValid) {
+      setMessage('Password does not meet security requirements.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) throw error;
+
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .update({ 
+          password_reset_required: false,
+          password_reset_at: null
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      setUser({ ...user, password_reset_required: false });
+      
+      await logUserEvent('password_changed_successfully', 'auth', {
+        reset_completed_at: new Date().toISOString()
+      });
+      
+      alert('Password updated successfully!');
+      onClose();
+    } catch (error) {
+      setMessage(`Error updating password: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-md w-full mx-4">
+        <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">🔐 Password Change Required</h3>
+        
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4 mb-4">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+            Your administrator has reset your password. Please create a new secure password to continue.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm New Password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+
+          <div className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+            <h4 className="font-medium text-gray-800 dark:text-white mb-2">Password Requirements:</h4>
+            <div className="space-y-1 text-sm">
+              {Object.entries({
+                minLength: 'At least 8 characters',
+                hasUppercase: 'At least 1 uppercase letter (A-Z)',
+                hasLowercase: 'At least 1 lowercase letter (a-z)',
+                hasNumber: 'At least 1 number (0-9)',
+                hasSymbol: 'At least 1 symbol (!@#$%^&*)'
+              }).map(([key, text]) => (
+                <div key={key} className={`flex items-center space-x-2 ${passwordValidation[key] ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  <span>{passwordValidation[key] ? '✅' : '❌'}</span>
+                  <span>{text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {message && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-3">
+              <p className="text-sm text-red-800 dark:text-red-200">{message}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handlePasswordChange}
+            disabled={loading || !passwordValidation.isValid}
+            className="w-full bg-pink-500 text-white py-3 rounded-lg hover:bg-pink-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Updating...' : 'Update Password'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PasswordChangeModal = ({ user, setUser, onClose, logUserEvent }) => {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const validatePassword = (password) => {
+    const minLength = password.length >= 8;
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const hasSymbol = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+    
+    return {
+      minLength,
+      hasUppercase,
+      hasLowercase,
+      hasNumber,
+      hasSymbol,
+      isValid: minLength && hasUppercase && hasLowercase && hasNumber && hasSymbol
+    };
+  };
+
+  const passwordValidation = validatePassword(newPassword);
+
+  const handlePasswordChange = async () => {
+    if (!passwordValidation.isValid) {
+      setMessage('Password does not meet security requirements.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) throw error;
+
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .update({ 
+          password_reset_required: false,
+          password_reset_at: null
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      setUser({ ...user, password_reset_required: false });
+      
+      await logUserEvent('password_changed_successfully', 'auth', {
+        reset_completed_at: new Date().toISOString()
+      });
+      
+      alert('Password updated successfully!');
+      onClose();
+    } catch (error) {
+      setMessage(`Error updating password: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-md w-full mx-4">
+        <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">🔐 Password Change Required</h3>
+        
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4 mb-4">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+            Your administrator has reset your password. Please create a new secure password to continue.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Confirm New Password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
+
+          <div className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+            <h4 className="font-medium text-gray-800 dark:text-white mb-2">Password Requirements:</h4>
+            <div className="space-y-1 text-sm">
+              {Object.entries({
+                minLength: 'At least 8 characters',
+                hasUppercase: 'At least 1 uppercase letter (A-Z)',
+                hasLowercase: 'At least 1 lowercase letter (a-z)',
+                hasNumber: 'At least 1 number (0-9)',
+                hasSymbol: 'At least 1 symbol (!@#$%^&*)'
+              }).map(([key, text]) => (
+                <div key={key} className={`flex items-center space-x-2 ${passwordValidation[key] ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  <span>{passwordValidation[key] ? '✅' : '❌'}</span>
+                  <span>{text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {message && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-3">
+              <p className="text-sm text-red-800 dark:text-red-200">{message}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handlePasswordChange}
+            disabled={loading || !passwordValidation.isValid}
+            className="w-full bg-pink-500 text-white py-3 rounded-lg hover:bg-pink-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Updating...' : 'Update Password'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MainApp = ({ user, setUser, logUserEvent, activeTab, setActiveTab }) => {
   const [cycles, setCycles] = useState([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { isDarkMode, toggleDarkMode } = useTheme();
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  // Determine active tab from URL or prop
-  const getActiveTabFromPath = () => {
-    const path = location.pathname;
-    if (path.includes('/analytics')) return 'analytics';
-    if (path.includes('/periods')) return 'periods';
-    if (path.includes('/pregnancy')) return 'pregnancy';
-    if (path.includes('/profile')) return 'profile';
-    if (path.includes('/admin')) return 'admin';
-    return 'dashboard';
-  };
-
-  const activeTab = propActiveTab || getActiveTabFromPath();
 
   useEffect(() => {
     if (user) {
@@ -261,23 +523,73 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
     if (error) console.error('Error signing out:', error);
   };
 
-  const handleTabChange = (tabId) => {
-    const routes = {
-      dashboard: '/dashboard',
-      analytics: '/analytics',
-      periods: '/periods',
-      pregnancy: '/pregnancy',
-      profile: '/profile',
-      admin: '/admin'
-    };
-    
-    navigate(routes[tabId]);
-    logUserEvent('tab_changed', 'navigation', { tab: tabId });
-    setIsMobileMenuOpen(false);
-  };
+  const exportData = async (format = 'csv') => {
+    try {
+      await logUserEvent('data_export_initiated', 'general', { format });
 
-  // ... rest of your MainApp component with the tab navigation updated to use handleTabChange
-  // Replace setActiveTab calls with handleTabChange
+      if (format === 'csv') {
+        // Create CSV content
+        const headers = ['Start Date', 'End Date', 'Period Length', 'Flow', 'Symptoms', 'Notes'];
+        const csvContent = [
+          headers.join(','),
+          ...cycles.map(cycle => [
+            cycle.start_date,
+            cycle.end_date || '',
+            cycle.period_length || '',
+            cycle.flow || '',
+            cycle.symptoms ? cycle.symptoms.join('; ') : '',
+            cycle.notes ? `"${cycle.notes.replace(/"/g, '""')}"` : ''
+          ].join(','))
+        ].join('\n');
+
+// Download CSV
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `fertility-tracker-data-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        await logUserEvent('data_export_completed', 'general', { format: 'csv', cycles_count: cycles.length });
+      } else if (format === 'pdf') {
+        // Simple PDF report
+        const reportContent = `
+FERTILITY TRACKER REPORT
+Generated: ${new Date().toLocaleDateString()}
+User: ${user.full_name || user.username}
+
+CYCLE SUMMARY:
+- Total cycles tracked: ${cycles.length}
+- Average cycle length: ${user.typical_cycle_length} days
+- Average period length: ${user.typical_period_length} days
+
+RECENT CYCLES:
+${cycles.slice(0, 10).map(cycle => 
+  `${cycle.start_date} - ${cycle.end_date || 'Ongoing'} (${cycle.period_length || '?'} days, ${cycle.flow || 'unknown'} flow)`
+).join('\n')}
+        `;
+
+        const blob = new Blob([reportContent], { type: 'text/plain' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `fertility-tracker-report-${new Date().toISOString().split('T')[0]}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        await logUserEvent('data_export_completed', 'general', { format: 'pdf', cycles_count: cycles.length });
+      }
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      await logUserEvent('data_export_failed', 'general', { format, error: error.message });
+      alert('Error exporting data. Please try again.');
+    }
+  };
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: TrendingUp },
@@ -308,6 +620,29 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
             </div>
             
             <div className="flex items-center space-x-2">
+              {/* Export Button */}
+              <div className="relative group">
+                <button className="bg-blue-500 text-white px-3 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm flex items-center space-x-1">
+                  <Download size={16} />
+                  <span className="hidden sm:inline">Export</span>
+                  <ChevronDown size={14} />
+                </button>
+                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border dark:border-gray-700 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                  <button
+                    onClick={() => exportData('csv')}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-t-lg"
+                  >
+                    Export as CSV
+                  </button>
+                  <button
+                    onClick={() => exportData('pdf')}
+                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-b-lg"
+                  >
+                    Export Report
+                  </button>
+                </div>
+              </div>
+
               {/* Dark Mode Toggle */}
               <button
                 onClick={toggleDarkMode}
@@ -357,7 +692,11 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => handleTabChange(tab.id)}
+                      onClick={() => {
+                        setActiveTab(tab.id);
+                        setIsMobileMenuOpen(false);
+                        logUserEvent('tab_changed', 'navigation', { tab: tab.id });
+                      }}
                       className={`flex flex-col items-center space-y-1 px-3 py-3 rounded-lg text-center transition-colors ${
                         activeTab === tab.id
                           ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
@@ -381,7 +720,10 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => handleTabChange(tab.id)}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      logUserEvent('tab_changed', 'navigation', { tab: tab.id });
+                    }}
                     className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-colors ${
                       activeTab === tab.id
                         ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
@@ -398,24 +740,12 @@ const MainApp = ({ user, setUser, logUserEvent, activeTab: propActiveTab }) => {
 
           {/* Main Content */}
           <div className="flex-1">
-            <ErrorBoundary>
-              {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
-            </ErrorBoundary>
-            <ErrorBoundary>
-              {activeTab === 'analytics' && <AdvancedAnalytics user={user} cycles={cycles} />}
-            </ErrorBoundary>
-            <ErrorBoundary>
-              {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logUserEvent={logUserEvent} />}
-            </ErrorBoundary>
-            <ErrorBoundary>
-              {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
-            </ErrorBoundary>
-            <ErrorBoundary>
-              {activeTab === 'profile' && <Profile user={user} setUser={setUser} logUserEvent={logUserEvent} />}
-            </ErrorBoundary>
-            <ErrorBoundary>
-              {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} logUserEvent={logUserEvent} />}
-            </ErrorBoundary>
+            {activeTab === 'dashboard' && <Dashboard user={user} cycles={cycles} />}
+            {activeTab === 'analytics' && <AdvancedAnalytics user={user} cycles={cycles} />}
+            {activeTab === 'periods' && <PeriodTracker user={user} cycles={cycles} setCycles={setCycles} fetchCycles={fetchCycles} logUserEvent={logUserEvent} />}
+            {activeTab === 'pregnancy' && <PregnancyPlanner user={user} cycles={cycles} />}
+            {activeTab === 'profile' && <Profile user={user} setUser={setUser} logUserEvent={logUserEvent} />}
+            {activeTab === 'admin' && user?.is_admin && <AdminPanel user={user} logUserEvent={logUserEvent} />}
           </div>
         </div>
       </div>
@@ -1417,7 +1747,7 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logUserEvent }) =
   );
 };
 
-// Enhanced Pregnancy Planner (same logic, but with dark mode styling)
+// Enhanced Pregnancy Planner
 const PregnancyPlanner = ({ user, cycles }) => {
   const [targetMonth, setTargetMonth] = useState('5');
   const [targetYear, setTargetYear] = useState('2026');
@@ -1587,10 +1917,6 @@ const PregnancyPlanner = ({ user, cycles }) => {
 const AdminPanel = ({ user, logUserEvent }) => {
   const [activeAdminTab, setActiveAdminTab] = useState('users');
   const [users, setUsers] = useState([]);
-  const [activityLogs, setActivityLogs] = useState([]);
-  const [adminLogs, setAdminLogs] = useState([]);
-  const [systemLogs, setSystemLogs] = useState([]);
-  const [auditLogs, setAuditLogs] = useState([]);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [tempPassword, setTempPassword] = useState('');
@@ -1601,10 +1927,6 @@ const AdminPanel = ({ user, logUserEvent }) => {
   useEffect(() => {
     if (user?.is_admin) {
       fetchUsers();
-      fetchActivityLogs();
-      fetchAdminLogs();
-      fetchSystemLogs();
-      fetchAuditLogs();
       
       logUserEvent('admin_panel_accessed', 'admin', {
         timestamp: new Date().toISOString(),
@@ -1652,72 +1974,6 @@ const AdminPanel = ({ user, logUserEvent }) => {
       alert(`Error loading users: ${error.message}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchActivityLogs = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('user_activity_logs')
-        .select(`
-          *,
-          user_profiles!inner(username, full_name)
-        `)
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      if (error) throw error;
-      setActivityLogs(data || []);
-    } catch (error) {
-      console.error('Error fetching activity logs:', error);
-    }
-  };
-
-  const fetchAdminLogs = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('admin_logs')
-        .select(`
-          *,
-          user_profiles!admin_user_id(username, full_name)
-        `)
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      if (error) throw error;
-      setAdminLogs(data || []);
-    } catch (error) {
-      console.error('Error fetching admin logs:', error);
-    }
-  };
-
-  const fetchSystemLogs = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('system_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      if (error) throw error;
-      setSystemLogs(data || []);
-    } catch (error) {
-      console.error('Error fetching system logs:', error);
-    }
-  };
-
-  const fetchAuditLogs = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('audit_logs')
-        .select('*')
-        .order('changed_at', { ascending: false })
-        .limit(100);
-
-      if (error) throw error;
-      setAuditLogs(data || []);
-    } catch (error) {
-      console.error('Error fetching audit logs:', error);
     }
   };
 
@@ -1808,35 +2064,8 @@ const AdminPanel = ({ user, logUserEvent }) => {
     return matchesSearch && matchesStatus;
   });
 
-  const getSeverityColor = (severity) => {
-    switch (severity) {
-      case 'critical': return 'text-red-800 bg-red-100 border-red-200 dark:text-red-200 dark:bg-red-900/30 dark:border-red-700';
-      case 'error': return 'text-red-700 bg-red-50 border-red-200 dark:text-red-200 dark:bg-red-900/20 dark:border-red-700';
-      case 'warning': return 'text-yellow-700 bg-yellow-50 border-yellow-200 dark:text-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-700';
-      case 'info':
-      default: return 'text-blue-700 bg-blue-50 border-blue-200 dark:text-blue-200 dark:bg-blue-900/20 dark:border-blue-700';
-    }
-  };
-
-  const getCategoryColor = (category) => {
-    switch (category) {
-      case 'auth': return 'text-purple-700 bg-purple-100 dark:text-purple-300 dark:bg-purple-900/30';
-      case 'cycle': return 'text-pink-700 bg-pink-100 dark:text-pink-300 dark:bg-pink-900/30';
-      case 'profile': return 'text-green-700 bg-green-100 dark:text-green-300 dark:bg-green-900/30';
-      case 'admin': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
-      case 'security': return 'text-orange-700 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/30';
-      case 'user_management': return 'text-indigo-700 bg-indigo-100 dark:text-indigo-300 dark:bg-indigo-900/30';
-      case 'system': return 'text-gray-700 bg-gray-100 dark:text-gray-300 dark:bg-gray-900/30';
-      default: return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
-    }
-  };
-
   const adminTabs = [
     { id: 'users', label: 'Users', icon: User },
-    { id: 'activity', label: 'Activity', icon: Activity },
-    { id: 'admin-logs', label: 'Admin', icon: Shield },
-    { id: 'system-logs', label: 'System', icon: Database },
-    { id: 'audit', label: 'Audit', icon: AlertTriangle },
     { id: 'stats', label: 'Stats', icon: Target }
   ];
 
@@ -1847,193 +2076,82 @@ const AdminPanel = ({ user, logUserEvent }) => {
         <p className="opacity-90">Comprehensive system management and monitoring</p>
       </div>
 
-      {/* Mobile-Responsive Admin Tabs */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border dark:border-gray-700">
-        <div className="flex flex-wrap gap-2">
-          {adminTabs.map(tab => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  setActiveAdminTab(tab.id);
-                  logUserEvent('admin_tab_changed', 'admin', {
-                    new_tab: tab.id,
-                    tab_label: tab.label
-                  });
-                }}
-                className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors text-sm ${
-                  activeAdminTab === tab.id
-                    ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700'
-                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                }`}
-              >
-                <Icon size={16} />
-                <span className="font-medium">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {/* User Management */}
-      {activeAdminTab === 'users' && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border dark:border-gray-700">
-          <div className="flex flex-col sm:flex-row gap-4 sm:gap-0 sm:justify-between sm:items-center mb-6">
-            <h3 className="font-semibold text-gray-800 dark:text-white">👥 User Management</h3>
-            
-            {/* Search and Filter Controls */}
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                <input
-                  type="text"
-                  placeholder="Search users..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                />
-                {searchTerm && (
-                  <button
-                    onClick={() => setSearchTerm('')}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    <X size={16} />
-                  </button>
-                )}
-              </div>
-              
-              <div className="relative">
-                <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="pl-10 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm appearance-none"
-                >
-                  <option value="all">All Users</option>
-                  <option value="active">Active</option>
-                  <option value="inactive">Deactivated</option>
-                  <option value="admin">Admins</option>
-                </select>
-              </div>
-              
-              <button
-                onClick={() => {
-                  fetchUsers();
-                  logUserEvent('users_list_refreshed', 'admin');
-                }}
-                disabled={loading}
-                className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400 text-sm whitespace-nowrap"
-              >
-                {loading ? 'Loading...' : 'Refresh'}
-              </button>
-            </div>
-          </div>
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border dark:border-gray-700">
+        <div className="flex flex-col sm:flex-row gap-4 sm:gap-0 sm:justify-between sm:items-center mb-6">
+          <h3 className="font-semibold text-gray-800 dark:text-white">👥 User Management</h3>
           
-          {/* Mobile-Responsive User List */}
-          <div className="space-y-4 sm:space-y-0">
-            {/* Desktop Table View */}
-            <div className="hidden lg:block overflow-x-auto">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-gray-50 dark:bg-gray-700">
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Name</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Username</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Last Login</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Cycles</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Role</th>
-                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredUsers.map((userData) => (
-                    <tr key={userData.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700 ${!userData.is_active ? 'bg-red-50 dark:bg-red-900/20' : ''}`}>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">
-                        {userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'N/A'}
-                      </td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">{userData.username}</td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          userData.is_active 
-                            ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' 
-                            : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
-                        }`}>
-                          {userData.is_active ? 'Active' : 'Deactivated'}
-                        </span>
-                      </td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">
-                        {userData.last_login_at ? new Date(userData.last_login_at).toLocaleDateString() : 'Never'}
-                      </td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">{userData.cycle_count}</td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          userData.is_admin 
-                            ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300' 
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
-                        }`}>
-                          {userData.is_admin ? 'Admin' : 'User'}
-                        </span>
-                      </td>
-                      <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
-                        <div className="flex space-x-1 flex-wrap">
-                          <button
-                            onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
-                            disabled={userData.id === user.id || loading}
-                            className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                          >
-                            {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
-                          </button>
-                          
-                          {userData.is_active && (
-                            <button
-                              onClick={() => resetUserPassword(userData.id, userData.username)}
-                              disabled={loading}
-                              className="bg-yellow-500 text-white px-2 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
-                            >
-                              Reset Password
-                            </button>
-                          )}
-                          
-                          {userData.is_active ? (
-                            <button
-                              onClick={() => deactivateUser(userData.id, userData.username)}
-                              disabled={userData.id === user.id || loading}
-                              className="bg-orange-500 text-white px-2 py-1 rounded text-xs hover:bg-orange-600 disabled:bg-gray-300 flex items-center space-x-1"
-                            >
-                              <UserX size={12} />
-                              <span className="hidden sm:inline">Deactivate</span>
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => reactivateUser(userData.id, userData.username)}
-                              disabled={loading}
-                              className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 disabled:bg-gray-300 flex items-center space-x-1"
-                            >
-                              <UserCheck size={12} />
-                              <span className="hidden sm:inline">Reactivate</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* Search and Filter Controls */}
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+              <input
+                type="text"
+                placeholder="Search users..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X size={16} />
+                </button>
+              )}
             </div>
-
-            {/* Mobile Card View */}
-            <div className="lg:hidden space-y-4">
-              {filteredUsers.map((userData) => (
-                <div key={userData.id} className={`border rounded-lg p-4 ${!userData.is_active ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700' : 'border-gray-200 dark:border-gray-600'}`}>
-                  <div className="flex justify-between items-start mb-3">
-                    <div>
-                      <h4 className="font-medium text-gray-900 dark:text-white">
-                        {userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || userData.username}
-                      </h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">@{userData.username}</p>
-                    </div>
-                    <div className="flex space-x-2">
+            
+            <div className="relative">
+              <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="pl-10 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm appearance-none"
+              >
+                <option value="all">All Users</option>
+                <option value="active">Active</option>
+                <option value="inactive">Deactivated</option>
+                <option value="admin">Admins</option>
+              </select>
+            </div>
+            
+            <button
+              onClick={() => {
+                fetchUsers();
+                logUserEvent('users_list_refreshed', 'admin');
+              }}
+              disabled={loading}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400 text-sm whitespace-nowrap"
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+		{/* Mobile-Responsive User List */}
+        <div className="space-y-4 sm:space-y-0">
+          {/* Desktop Table View */}
+          <div className="hidden lg:block overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-700">
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Name</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Username</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Last Login</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Cycles</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Role</th>
+                  <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredUsers.map((userData) => (
+                  <tr key={userData.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700 ${!userData.is_active ? 'bg-red-50 dark:bg-red-900/20' : ''}`}>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">
+                      {userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'N/A'}
+                    </td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">{userData.username}</td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
                       <span className={`px-2 py-1 rounded text-xs font-medium ${
                         userData.is_active 
                           ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' 
@@ -2041,6 +2159,12 @@ const AdminPanel = ({ user, logUserEvent }) => {
                       }`}>
                         {userData.is_active ? 'Active' : 'Deactivated'}
                       </span>
+                    </td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">
+                      {userData.last_login_at ? new Date(userData.last_login_at).toLocaleDateString() : 'Never'}
+                    </td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm text-gray-900 dark:text-white">{userData.cycle_count}</td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
                       <span className={`px-2 py-1 rounded text-xs font-medium ${
                         userData.is_admin 
                           ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300' 
@@ -2048,76 +2172,148 @@ const AdminPanel = ({ user, logUserEvent }) => {
                       }`}>
                         {userData.is_admin ? 'Admin' : 'User'}
                       </span>
-                    </div>
+                    </td>
+                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-2">
+                      <div className="flex space-x-1 flex-wrap">
+                        <button
+                          onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
+                          disabled={userData.id === user.id || loading}
+                          className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        >
+                          {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
+                        </button>
+                        
+                        {userData.is_active && (
+                          <button
+                            onClick={() => resetUserPassword(userData.id, userData.username)}
+                            disabled={loading}
+                            className="bg-yellow-500 text-white px-2 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
+                          >
+                            Reset Password
+                          </button>
+                        )}
+                        
+                        {userData.is_active ? (
+                          <button
+                            onClick={() => deactivateUser(userData.id, userData.username)}
+                            disabled={userData.id === user.id || loading}
+                            className="bg-orange-500 text-white px-2 py-1 rounded text-xs hover:bg-orange-600 disabled:bg-gray-300 flex items-center space-x-1"
+                          >
+                            <UserX size={12} />
+                            <span className="hidden sm:inline">Deactivate</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => reactivateUser(userData.id, userData.username)}
+                            disabled={loading}
+                            className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600 disabled:bg-gray-300 flex items-center space-x-1"
+                          >
+                            <UserCheck size={12} />
+                            <span className="hidden sm:inline">Reactivate</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="lg:hidden space-y-4">
+            {filteredUsers.map((userData) => (
+              <div key={userData.id} className={`border rounded-lg p-4 ${!userData.is_active ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700' : 'border-gray-200 dark:border-gray-600'}`}>
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <h4 className="font-medium text-gray-900 dark:text-white">
+                      {userData.full_name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || userData.username}
+                    </h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">@{userData.username}</p>
                   </div>
-                  
-                  <div className="grid grid-cols-2 gap-4 mb-3 text-sm">
-                    <div>
-                      <span className="text-gray-600 dark:text-gray-400">Last Login:</span>
-                      <p className="text-gray-900 dark:text-white">{userData.last_login_at ? new Date(userData.last_login_at).toLocaleDateString() : 'Never'}</p>
-                    </div>
-                    <div>
-                      <span className="text-gray-600 dark:text-gray-400">Cycles:</span>
-                      <p className="text-gray-900 dark:text-white">{userData.cycle_count}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
-                      disabled={userData.id === user.id || loading}
-                      className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
-                    </button>
-                    
-                    {userData.is_active && (
-                      <button
-                        onClick={() => resetUserPassword(userData.id, userData.username)}
-                        disabled={loading}
-                        className="bg-yellow-500 text-white px-3 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
-                      >
-                        Reset Password
-                      </button>
-                    )}
-                    
-                    {userData.is_active ? (
-                      <button
-                        onClick={() => deactivateUser(userData.id, userData.username)}
-                        disabled={userData.id === user.id || loading}
-                        className="bg-orange-500 text-white px-3 py-1 rounded text-xs hover:bg-orange-600 disabled:bg-gray-300 flex items-center space-x-1"
-                      >
-                        <UserX size={12} />
-                        <span>Deactivate</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => reactivateUser(userData.id, userData.username)}
-                        disabled={loading}
-                        className="bg-green-500 text-white px-3 py-1 rounded text-xs hover:bg-green-600 disabled:bg-gray-300 flex items-center space-x-1"
-                      >
-                        <UserCheck size={12} />
-                        <span>Reactivate</span>
-                      </button>
-                    )}
+                  <div className="flex space-x-2">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      userData.is_active 
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' 
+                        : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
+                    }`}>
+                      {userData.is_active ? 'Active' : 'Deactivated'}
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      userData.is_admin 
+                        ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300' 
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
+                    }`}>
+                      {userData.is_admin ? 'Admin' : 'User'}
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
+                
+                <div className="grid grid-cols-2 gap-4 mb-3 text-sm">
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Last Login:</span>
+                    <p className="text-gray-900 dark:text-white">{userData.last_login_at ? new Date(userData.last_login_at).toLocaleDateString() : 'Never'}</p>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 dark:text-gray-400">Cycles:</span>
+                    <p className="text-gray-900 dark:text-white">{userData.cycle_count}</p>
+                  </div>
+                </div>
+                
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => toggleUserAdmin(userData.id, userData.is_admin)}
+                    disabled={userData.id === user.id || loading}
+                    className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  >
+                    {userData.is_admin ? 'Remove Admin' : 'Make Admin'}
+                  </button>
+                  
+                  {userData.is_active && (
+                    <button
+                      onClick={() => resetUserPassword(userData.id, userData.username)}
+                      disabled={loading}
+                      className="bg-yellow-500 text-white px-3 py-1 rounded text-xs hover:bg-yellow-600 disabled:bg-gray-300"
+                    >
+                      Reset Password
+                    </button>
+                  )}
+                  
+                  {userData.is_active ? (
+                    <button
+                      onClick={() => deactivateUser(userData.id, userData.username)}
+                      disabled={userData.id === user.id || loading}
+                      className="bg-orange-500 text-white px-3 py-1 rounded text-xs hover:bg-orange-600 disabled:bg-gray-300 flex items-center space-x-1"
+                    >
+                      <UserX size={12} />
+                      <span>Deactivate</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => reactivateUser(userData.id, userData.username)}
+                      disabled={loading}
+                      className="bg-green-500 text-white px-3 py-1 rounded text-xs hover:bg-green-600 disabled:bg-gray-300 flex items-center space-x-1"
+                    >
+                      <UserCheck size={12} />
+                      <span>Reactivate</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
-          
-          {filteredUsers.length === 0 && !loading && (
-            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-              {searchTerm || filterStatus !== 'all' ? 
-                'No users match your search criteria.' : 
-                'No users found. Try refreshing the data.'
-              }
-            </div>
-          )}
         </div>
-      )}
+        
+        {filteredUsers.length === 0 && !loading && (
+          <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+            {searchTerm || filterStatus !== 'all' ? 
+              'No users match your search criteria.' : 
+              'No users found. Try refreshing the data.'
+            }
+          </div>
+        )}
+      </div>
 
-      {/* Other admin tabs content would continue here with enhanced mobile responsiveness... */}
       {/* Password Reset Modal */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
