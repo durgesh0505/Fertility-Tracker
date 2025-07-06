@@ -1420,10 +1420,9 @@ ${cycles.slice(0, 10).map(cycle =>
       } < /span> < /
       p > <
       p className = "text-sm text-gray-600 dark:text-gray-400" >
-      Avg Length: < span className = "font-medium text-gray-800 dark:text-white" > {
-        cycleStats.averageLength
-      }
-       days < /span> < /
+      Avg Length: <span className="font-medium text-gray-800 dark:text-white">
+  	{cycleStats.averageLength} days
+	</span> < /
       p > <
       /div> < /
       div >
