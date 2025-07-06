@@ -1114,21 +1114,21 @@ const Dashboard = ({ user, cycles }) => {
     const recentCycles = cycles.slice(0, 6);
     let avgCycleLength = typicalCycleLength;
 
-    if (recentCycles.length >= 2) {
-      const cycleLengths = [];
-      for (let i = 0; i < recentCycles.length - 1; i++) {
-        const current = new Date(recentCycles[i].start_date);
-        const next = new Date(recentCycles[i + 1].start_date);
-        const length = Math.ceil((current - next) / (24 * 60 * 60 * 1000));
-        if (length > 15 && length < 45) {
-          cycleLengths.push(length);
-        }
-      }
+	if (recentCycles.length >= 2) {
+	  const cycleLengths = [];
+	  for (let i = 0; i < recentCycles.length - 1; i++) {
+		const current = new Date(recentCycles[i].start_date + 'T00:00:00');
+		const next = new Date(recentCycles[i + 1].start_date + 'T00:00:00');
+		const length = Math.ceil((current - next) / (24 * 60 * 60 * 1000));
+		if (length > 15 && length < 45) { // Valid cycle length
+		  cycleLengths.push(length);
+		}
+	  }
 
-      if (cycleLengths.length > 0) {
-        avgCycleLength = Math.round(cycleLengths.reduce((a, b) => a + b, 0) / cycleLengths.length);
-      }
-    }
+	  if (cycleLengths.length > 0) {
+		avgCycleLength = Math.round(cycleLengths.reduce((a, b) => a + b, 0) / cycleLengths.length);
+	  }
+	}
 
     const lastPeriod = new Date(cycles[0].start_date);
     const predictions = [];
@@ -1510,18 +1510,19 @@ const AdvancedAnalytics = ({ user, cycles }) => {
     );
   }
 
-  // Calculate analytics data
-  const cycleLengths = [];
-  const periodLengths = cycles.map(c => c.period_length || 5);
+	// Calculate analytics data
+	const cycleLengths = [];
+	const periodLengths = cycles.map(c => c.period_length || 5);
 
-  for (let i = 0; i < cycles.length - 1; i++) {
-    const current = new Date(cycles[i].start_date);
-    const next = new Date(cycles[i + 1].start_date);
-    const length = Math.ceil((current - next) / (24 * 60 * 60 * 1000));
-    if (length > 15 && length < 45) {
-      cycleLengths.push(length);
-    }
-  }
+	// ✅ CALCULATE ACTUAL CYCLE LENGTHS DYNAMICALLY
+	for (let i = 0; i < cycles.length - 1; i++) {
+	  const current = new Date(cycles[i].start_date + 'T00:00:00');
+	  const next = new Date(cycles[i + 1].start_date + 'T00:00:00');
+	  const length = Math.ceil((current - next) / (24 * 60 * 60 * 1000));
+	  if (length > 15 && length < 45) { // Only include reasonable cycle lengths
+		cycleLengths.push(length);
+	  }
+	}
 
   const avgCycleLength = cycleLengths.length > 0 ?
     Math.round(cycleLengths.reduce((a, b) => a + b, 0) / cycleLengths.length) : 28;
@@ -2403,90 +2404,102 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logUserEvent }) =
         </button>
       </div>
 
-      {/* Period History */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border dark:border-gray-700">
-        <h3 className="font-semibold text-gray-800 dark:text-white mb-4">Period History</h3>
+	{/* Period History */}
+	<div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border dark:border-gray-700">
+	  <h3 className="font-semibold text-gray-800 dark:text-white mb-4">Period History</h3>
 
-        {cycles.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-8">
-            No periods recorded yet. Add your first period above!
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {cycles.map((cycle) => (
-              <div key={cycle.id} className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <div className="flex items-center space-x-3">
-                      <span className="font-medium text-gray-800 dark:text-white">
-                        {new Date(cycle.start_date + 'T00:00:00').toDateString()}
-                      </span>
-                      {cycle.end_date && (
-                        <span className="text-sm text-gray-600 dark:text-gray-400">
-                          to {new Date(cycle.end_date + 'T00:00:00').toDateString()}
-                        </span>
-                      )}
-                      <span 
-                        className={`w-4 h-4 rounded-full ${
-                          cycle.flow === 'light' ? 'bg-pink-200' :
-                          cycle.flow === 'heavy' ? 'bg-pink-600' : 'bg-pink-400'
-                        }`}
-                      />
-                      <span className="text-sm capitalize text-gray-600 dark:text-gray-400">
-                        {cycle.flow} flow
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Duration: {cycle.period_length} days
-                      {cycle.cycle_length && ` • Cycle: ${cycle.cycle_length} days`}
-                    </p>
-                    {cycle.notes && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 italic">
-                        {cycle.notes}
-                      </p>
-                    )}
-                  </div>
-                  
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={() => openEditModal(cycle)}
-                      className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-                      title="Edit Period"
-                    >
-                      <Edit3 size={16} />
-                    </button>
-                    <button 
-                      onClick={() => deletePeriod(cycle.id)}
-                      className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                      title="Delete Period"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
+	  {cycles.length === 0 ? (
+		<p className="text-gray-500 dark:text-gray-400 text-center py-8">
+		  No periods recorded yet. Add your first period above!
+		</p>
+	  ) : (
+		<div className="space-y-4">
+		  {cycles.map((cycle, index) => {
+			// ✅ CALCULATE ACTUAL CYCLE LENGTH DYNAMICALLY
+			let actualCycleLength = null;
+			if (index < cycles.length - 1) {
+			  // Calculate days between this period and the next period
+			  const currentDate = new Date(cycle.start_date + 'T00:00:00');
+			  const nextDate = new Date(cycles[index + 1].start_date + 'T00:00:00');
+			  actualCycleLength = Math.ceil((currentDate - nextDate) / (24 * 60 * 60 * 1000));
+			}
 
-                {cycle.symptoms && cycle.symptoms.length > 0 && (
-                  <div className="mt-2">
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Symptoms:
-                    </p>
-                    <div className="flex flex-wrap gap-1">
-                      {cycle.symptoms.map((symptom, index) => (
-                        <span 
-                          key={index}
-                          className="bg-pink-100 dark:bg-pink-900/30 text-pink-800 dark:text-pink-300 text-xs px-2 py-1 rounded"
-                        >
-                          {symptom}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+			return (
+			  <div key={cycle.id} className="border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+				<div className="flex justify-between items-start mb-3">
+				  <div>
+					<div className="flex items-center space-x-3">
+					  <span className="font-medium text-gray-800 dark:text-white">
+						{new Date(cycle.start_date + 'T00:00:00').toDateString()}
+					  </span>
+					  {cycle.end_date && (
+						<span className="text-sm text-gray-600 dark:text-gray-400">
+						  to {new Date(cycle.end_date + 'T00:00:00').toDateString()}
+						</span>
+					  )}
+					  <span 
+						className={`w-4 h-4 rounded-full ${
+						  cycle.flow === 'light' ? 'bg-pink-200' :
+						  cycle.flow === 'heavy' ? 'bg-pink-600' : 'bg-pink-400'
+						}`}
+					  />
+					  <span className="text-sm capitalize text-gray-600 dark:text-gray-400">
+						{cycle.flow} flow
+					  </span>
+					</div>
+					<p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+					  Duration: {cycle.period_length} days
+					  {/* ✅ Show calculated cycle length instead of stored value */}
+					  {actualCycleLength && ` • Cycle: ${actualCycleLength} days`}
+					</p>
+					{cycle.notes && (
+					  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 italic">
+						{cycle.notes}
+					  </p>
+					)}
+				  </div>
+				  
+				  <div className="flex space-x-2">
+					<button 
+					  onClick={() => openEditModal(cycle)}
+					  className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+					  title="Edit Period"
+					>
+					  <Edit3 size={16} />
+					</button>
+					<button 
+					  onClick={() => deletePeriod(cycle.id)}
+					  className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+					  title="Delete Period"
+					>
+					  <Trash2 size={16} />
+					</button>
+				  </div>
+				</div>
+
+				{cycle.symptoms && cycle.symptoms.length > 0 && (
+				  <div className="mt-2">
+					<p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+					  Symptoms:
+					</p>
+					<div className="flex flex-wrap gap-1">
+					  {cycle.symptoms.map((symptom, index) => (
+						<span 
+						  key={index}
+						  className="bg-pink-100 dark:bg-pink-900/30 text-pink-800 dark:text-pink-300 text-xs px-2 py-1 rounded"
+						>
+						  {symptom}
+						</span>
+					  ))}
+					</div>
+				  </div>
+				)}
+			  </div>
+			);
+		  })}
+		</div>
+	  )}
+	</div>
 
       {/* Edit Period Modal */}
       {showEditModal && (
