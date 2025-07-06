@@ -1423,7 +1423,7 @@ ${cycles.slice(0, 10).map(cycle =>
       Avg Length: < span className = "font-medium text-gray-800 dark:text-white" > {
         cycleStats.averageLength
       }
-      days < /span> < /
+       days < /span> < /
       p > <
       /div> < /
       div >
@@ -1451,7 +1451,7 @@ ${cycles.slice(0, 10).map(cycle =>
       Length: < span className = "font-medium text-gray-800 dark:text-white" > {
         user?.typical_period_length || 5
       }
-      days < /span> < /
+       days < /span> < /
       p > <
       /div> < /
       div >
@@ -1748,7 +1748,7 @@ ${cycles.slice(0, 10).map(cycle =>
           } - {
             Math.max(...cycleLengths)
           }
-          days <
+           days <
           /p> < /
           div > <
           /div>
@@ -1790,7 +1790,7 @@ ${cycles.slice(0, 10).map(cycle =>
           days | Most common: {
             user?.typical_period_length || 5
           }
-          days <
+           days <
           /p> < /
           div > <
           /div>
@@ -3109,7 +3109,7 @@ const PregnancyPlanner = ({
         p className = "text-sm text-gray-600 dark:text-gray-400" > {
           calculation.daysFromNow
         }
-        days < /p> < /
+         days < /p> < /
         div > <
         /div> < /
         div >
