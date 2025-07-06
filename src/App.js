@@ -17,6 +17,7 @@ import {
   Clock,
   Target,
   Trash2,
+  Edit3,
   LogOut,
   UserX,
   UserCheck,
@@ -1175,7 +1176,71 @@ ${cycles.slice(0, 10).map(cycle =>
       return predictions;
     };
 
+    // Late period check function
+    const checkLatePeriod = (cycles, typicalCycleLength) => {
+      if (!cycles || cycles.length === 0) return null;
+      
+      const lastPeriod = new Date(cycles[0].start_date + 'T00:00:00');
+      const today = new Date();
+      const daysSinceLastPeriod = Math.ceil((today - lastPeriod) / (24 * 60 * 60 * 1000));
+      const expectedCycleLength = typicalCycleLength || 28;
+      
+      // Calculate expected next period date
+      const expectedNextPeriod = new Date(lastPeriod);
+      expectedNextPeriod.setDate(lastPeriod.getDate() + expectedCycleLength);
+      
+      const daysLate = Math.ceil((today - expectedNextPeriod) / (24 * 60 * 60 * 1000));
+      
+      if (daysLate > 0) {
+        return {
+          isLate: true,
+          daysLate: daysLate,
+          expectedDate: expectedNextPeriod.toDateString(),
+          lastPeriodDate: lastPeriod.toDateString(),
+          daysSinceLastPeriod: daysSinceLastPeriod
+        };
+      }
+      
+      return { isLate: false, daysSinceLastPeriod };
+    };
+
+    // Quick start period function
+    const quickStartPeriod = async () => {
+      try {
+        const today = new Date();
+        const startDate = today.toISOString().split('T')[0];
+        const endDate = new Date(today);
+        endDate.setDate(today.getDate() + (user?.typical_period_length || 5) - 1);
+        
+        const cycleData = {
+          user_id: user.id,
+          start_date: startDate,
+          end_date: endDate.toISOString().split('T')[0],
+          period_length: user?.typical_period_length || 5,
+          cycle_length: user?.typical_cycle_length || 28,
+          flow: 'medium',
+          symptoms: [],
+          notes: 'Period started (late period logged quickly)'
+        };
+
+        const { error } = await supabase
+          .from('cycles')
+          .insert([cycleData]);
+
+        if (error) throw error;
+        
+        // Refresh the cycles data
+        window.location.reload(); // Simple refresh to update all components
+        
+        alert('Period logged successfully!');
+      } catch (error) {
+        console.error('Error logging period:', error);
+        alert('Error logging period. Please try again.');
+      }
+    };
+
     const nextPeriods = calculateAdvancedPredictions(cycles, user?.typical_cycle_length || 28);
+    const latePeriodStatus = checkLatePeriod(cycles, user?.typical_cycle_length || 28);
 
     if (!cycles || cycles.length === 0) {
       return ( <
@@ -1248,6 +1313,57 @@ ${cycles.slice(0, 10).map(cycle =>
       p className = "opacity-90" > Here 's your cycle overview and advanced predictions</p> < /
       div >
 
+      {/* Late Period Alert */}
+      {latePeriodStatus?.isLate && (
+        <div className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white rounded-xl p-6 shadow-lg border-l-4 border-yellow-600">
+          <div className="flex items-center space-x-3">
+            <AlertTriangle size={32} className="text-yellow-100" />
+            <div>
+              <h3 className="text-xl font-bold mb-1">⏰ Period is Late</h3>
+              <p className="opacity-90 mb-2">
+                Your period is {latePeriodStatus.daysLate} day{latePeriodStatus.daysLate > 1 ? 's' : ''} late
+              </p>
+              <div className="text-sm opacity-80">
+                <p>Expected: {latePeriodStatus.expectedDate}</p>
+                <p>Last period: {latePeriodStatus.lastPeriodDate} ({latePeriodStatus.daysSinceLastPeriod} days ago)</p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button 
+              onClick={() => quickStartPeriod()}
+              className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              📅 Log Period Now
+            </button>
+            <button 
+              onClick={() => {
+                alert('Consider taking a pregnancy test if your period is more than a week late and you\'re sexually active. Consult with a healthcare provider for personalized advice.');
+              }}
+              className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              ℹ️ What Should I Do?
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Show cycle length info for periods that are getting close */}
+      {!latePeriodStatus?.isLate && latePeriodStatus?.daysSinceLastPeriod > ((user?.typical_cycle_length || 28) - 3) && (
+        <div className="bg-gradient-to-r from-blue-400 to-purple-500 text-white rounded-xl p-4 shadow-lg">
+          <div className="flex items-center space-x-3">
+            <Clock size={24} className="text-blue-100" />
+            <div>
+              <h4 className="font-semibold">📅 Period Expected Soon</h4>
+              <p className="text-sm opacity-90">
+                It's been {latePeriodStatus.daysSinceLastPeriod} days since your last period. 
+                Your next period is expected in the next few days.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {
         /* Enhanced Stats Grid */
       } <
@@ -1268,14 +1384,14 @@ ${cycles.slice(0, 10).map(cycle =>
       <
       p className = "text-sm text-gray-600 dark:text-gray-400" >
       Last Period: < span className = "font-medium text-gray-800 dark:text-white" > {
-        new Date(cycles[0]?.start_date).toDateString()
+        new Date(cycles[0]?.start_date + 'T00:00:00').toDateString()
       } <
       /span> < /
       p > {
         nextPeriods.length > 0 && ( <
           p className = "text-sm text-gray-600 dark:text-gray-400" >
           Next Period: < span className = "font-medium text-pink-600 dark:text-pink-400" > {
-            new Date(nextPeriods[0].startDate).toDateString()
+            new Date(nextPeriods[0].startDate + 'T00:00:00').toDateString()
           } <
           /span> < /
           p >
@@ -1405,15 +1521,15 @@ ${cycles.slice(0, 10).map(cycle =>
               <
               p className = "text-gray-600 dark:text-gray-400" >
               <
-              strong > Period Start: < /strong> {new Date(period.startDate).toDateString()} < /
+              strong > Period Start: < /strong> {new Date(period.startDate + 'T00:00:00').toDateString()} < /
               p > <
               p className = "text-gray-600 dark:text-gray-400" >
               <
-              strong > Fertile Window: < /strong> {new Date(period.fertileWindowStart).toLocaleDateString()} - {new Date(period.fertileWindowEnd).toLocaleDateString()} < /
+              strong > Fertile Window: < /strong> {new Date(period.fertileWindowStart + 'T00:00:00').toLocaleDateString()} - {new Date(period.fertileWindowEnd + 'T00:00:00').toLocaleDateString()} < /
               p > <
               p className = "text-gray-600 dark:text-gray-400" >
               <
-              strong > Ovulation: < /strong> {new Date(period.ovulationDate).toDateString()} < /
+              strong > Ovulation: < /strong> {new Date(period.ovulationDate + 'T00:00:00').toDateString()} < /
               p > <
               /div> < /
               div >
@@ -2226,6 +2342,17 @@ ${cycles.slice(0, 10).map(cycle =>
         notes: ''
       });
       const [loading, setLoading] = useState(false);
+      
+      // Edit modal states
+      const [showEditModal, setShowEditModal] = useState(false);
+      const [editingCycle, setEditingCycle] = useState(null);
+      const [editFormData, setEditFormData] = useState({
+        startDate: '',
+        endDate: '',
+        flow: 'medium',
+        symptoms: [],
+        notes: ''
+      });
 
       const symptoms = [
         'Cramps', 'Bloating', 'Headache', 'Mood Changes', 'Breast Pain',
@@ -2240,21 +2367,28 @@ ${cycles.slice(0, 10).map(cycle =>
 
         setLoading(true);
         try {
-          const startDate = new Date(newPeriod.startDate);
-          let endDate = null;
+          // Fix: Use date strings directly instead of Date objects to avoid timezone issues
+          const startDateStr = newPeriod.startDate; // Keep as string
+          let endDateStr = newPeriod.endDate;
           let periodLength = user?.typical_period_length || 5;
 
           if (newPeriod.endDate) {
-            endDate = new Date(newPeriod.endDate);
-            periodLength = Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1;
+            // Calculate period length using date strings
+            const start = new Date(newPeriod.startDate + 'T00:00:00');
+            const end = new Date(newPeriod.endDate + 'T00:00:00');
+            periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
           } else {
-            endDate = new Date(startDate.getTime() + (periodLength * 24 * 60 * 60 * 1000));
+            // Calculate end date by adding days to start date
+            const start = new Date(newPeriod.startDate + 'T00:00:00');
+            const end = new Date(start);
+            end.setDate(start.getDate() + periodLength - 1);
+            endDateStr = end.toISOString().split('T')[0];
           }
 
           const cycleData = {
             user_id: user.id,
-            start_date: newPeriod.startDate,
-            end_date: endDate.toISOString().split('T')[0],
+            start_date: startDateStr, // Use string directly
+            end_date: endDateStr,     // Use string directly
             period_length: periodLength,
             cycle_length: user?.typical_cycle_length || 28,
             flow: newPeriod.flow,
@@ -2262,10 +2396,7 @@ ${cycles.slice(0, 10).map(cycle =>
             notes: newPeriod.notes || ''
           };
 
-          const {
-            data,
-            error
-          } = await supabase
+          const { data, error } = await supabase
             .from('cycles')
             .insert([cycleData])
             .select();
@@ -2316,6 +2447,88 @@ ${cycles.slice(0, 10).map(cycle =>
         }
       };
 
+      // Edit functions
+      const openEditModal = (cycle) => {
+        setEditingCycle(cycle);
+        setEditFormData({
+          startDate: cycle.start_date,
+          endDate: cycle.end_date || '',
+          flow: cycle.flow || 'medium',
+          symptoms: cycle.symptoms || [],
+          notes: cycle.notes || ''
+        });
+        setShowEditModal(true);
+      };
+
+      const closeEditModal = () => {
+        setShowEditModal(false);
+        setEditingCycle(null);
+        setEditFormData({
+          startDate: '',
+          endDate: '',
+          flow: 'medium',
+          symptoms: [],
+          notes: ''
+        });
+      };
+
+      const updatePeriod = async () => {
+        if (!editFormData.startDate) {
+          alert('Please enter a start date');
+          return;
+        }
+
+        setLoading(true);
+        try {
+          // Fix: Use date strings directly to avoid timezone issues
+          const startDateStr = editFormData.startDate;
+          let endDateStr = editFormData.endDate;
+          let periodLength = user?.typical_period_length || 5;
+
+          if (editFormData.endDate) {
+            const start = new Date(editFormData.startDate + 'T00:00:00');
+            const end = new Date(editFormData.endDate + 'T00:00:00');
+            periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
+          } else {
+            const start = new Date(editFormData.startDate + 'T00:00:00');
+            const end = new Date(start);
+            end.setDate(start.getDate() + periodLength - 1);
+            endDateStr = end.toISOString().split('T')[0];
+          }
+
+          const updateData = {
+            start_date: startDateStr,
+            end_date: endDateStr,
+            period_length: periodLength,
+            flow: editFormData.flow,
+            symptoms: editFormData.symptoms || [],
+            notes: editFormData.notes || ''
+          };
+
+          const { error } = await supabase
+            .from('cycles')
+            .update(updateData)
+            .eq('id', editingCycle.id);
+
+          if (error) throw error;
+
+          await fetchCycles();
+          await logUserEvent('period_updated', 'cycle', {
+            cycle_id: editingCycle.id,
+            start_date: editFormData.startDate,
+            flow: editFormData.flow
+          });
+
+          closeEditModal();
+          alert('Period updated successfully!');
+        } catch (error) {
+          console.error('Error updating period:', error);
+          alert(`Error updating period: ${error.message}`);
+        } finally {
+          setLoading(false);
+        }
+      };
+
       const toggleSymptom = (symptom) => {
         setNewPeriod(prev => ({
           ...prev,
@@ -2323,27 +2536,35 @@ ${cycles.slice(0, 10).map(cycle =>
             prev.symptoms.filter(s => s !== symptom) : [...prev.symptoms, symptom]
         }));
       };
+
+      const toggleEditSymptom = (symptom) => {
+        setEditFormData(prev => ({
+          ...prev,
+          symptoms: prev.symptoms.includes(symptom) 
+            ? prev.symptoms.filter(s => s !== symptom) 
+            : [...prev.symptoms, symptom]
+        }));
+      };
 	  
-	// Auto-fill end date when start date changes
-	useEffect(() => {
-	  if (newPeriod.startDate) {
-		const startDate = new Date(newPeriod.startDate);
-		const typicalLength = user?.typical_period_length || 5;
-		const endDate = new Date(startDate);
-		endDate.setDate(startDate.getDate() + typicalLength - 1);
-		
-		setNewPeriod(prev => ({
-		  ...prev,
-		  endDate: endDate.toISOString().split('T')[0]
-		}));
-	  } else {
-		// Clear end date if start date is cleared
-		setNewPeriod(prev => ({
-		  ...prev,
-		  endDate: ''
-		}));
-	  }
-	}, [newPeriod.startDate, user?.typical_period_length]);
+      // Auto-fill end date when start date changes
+      useEffect(() => {
+        if (newPeriod.startDate) {
+          const startDate = new Date(newPeriod.startDate + 'T00:00:00');
+          const typicalLength = user?.typical_period_length || 5;
+          const endDate = new Date(startDate);
+          endDate.setDate(startDate.getDate() + typicalLength - 1);
+          
+          setNewPeriod(prev => ({
+            ...prev,
+            endDate: endDate.toISOString().split('T')[0]
+          }));
+        } else {
+          setNewPeriod(prev => ({
+            ...prev,
+            endDate: ''
+          }));
+        }
+      }, [newPeriod.startDate, user?.typical_period_length]);
 
       return ( <
         div className = "space-y-6" >
@@ -2498,13 +2719,13 @@ ${cycles.slice(0, 10).map(cycle =>
                   div className = "flex items-center space-x-3" >
                   <
                   span className = "font-medium text-gray-800 dark:text-white" > {
-                    new Date(cycle.start_date).toDateString()
+                    new Date(cycle.start_date + 'T00:00:00').toDateString()
                   } <
                   /span> {
                   cycle.end_date && ( <
                     span className = "text-sm text-gray-600 dark:text-gray-400" >
                     to {
-                      new Date(cycle.end_date).toDateString()
+                      new Date(cycle.end_date + 'T00:00:00').toDateString()
                     } <
                     /span>
                   )
@@ -2534,17 +2755,25 @@ ${cycles.slice(0, 10).map(cycle =>
                   } < /p>
                 )
               } <
-              /div> <
-              button onClick = {
-                () => deletePeriod(cycle.id)
-              }
-              className = "text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300" >
+              /div> 
+              
+              <div className="flex space-x-2">
+                <button 
+                  onClick={() => openEditModal(cycle)}
+                  className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                  title="Edit Period"
+                >
+                  <Edit3 size={16} />
+                </button>
+                <button 
+                  onClick={() => deletePeriod(cycle.id)}
+                  className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                  title="Delete Period"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
               <
-              Trash2 size = {
-                16
-              }
-              /> < /
-              button > <
               /div>
 
               {
@@ -2573,7 +2802,122 @@ ${cycles.slice(0, 10).map(cycle =>
         /div>
       )
     } <
-    /div> < /
+    /div>
+
+    {/* Edit Period Modal */}
+    {showEditModal && (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
+              📝 Edit Period
+            </h3>
+            <button 
+              onClick={closeEditModal}
+              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+            >
+              <X size={24} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Start Date
+              </label>
+              <input
+                type="date"
+                value={editFormData.startDate}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, startDate: e.target.value }))}
+                min="2020-01-01"
+                max="2050-12-31"
+                className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={editFormData.endDate}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, endDate: e.target.value }))}
+                min="2020-01-01"
+                max="2050-12-31"
+                className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Flow Intensity
+              </label>
+              <select 
+                value={editFormData.flow}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, flow: e.target.value }))}
+                className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                <option value="light">Light</option>
+                <option value="medium">Medium</option>
+                <option value="heavy">Heavy</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Symptoms
+            </label>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {symptoms.map(symptom => (
+                <button
+                  key={symptom}
+                  onClick={() => toggleEditSymptom(symptom)}
+                  className={`p-2 rounded-lg text-sm transition-colors ${
+                    editFormData.symptoms.includes(symptom)
+                      ? 'bg-pink-500 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  {symptom}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Notes (Optional)
+            </label>
+            <textarea 
+              value={editFormData.notes}
+              onChange={(e) => setEditFormData(prev => ({ ...prev, notes: e.target.value }))}
+              placeholder="Any additional notes..."
+              className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              rows="3"
+            />
+          </div>
+
+          <div className="flex space-x-3">
+            <button
+              onClick={updatePeriod}
+              disabled={!editFormData.startDate || loading}
+              className="flex-1 bg-pink-500 text-white px-6 py-2 rounded-lg hover:bg-pink-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Updating...' : 'Update Period'}
+            </button>
+            <button
+              onClick={closeEditModal}
+              className="flex-1 bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    < /
   div >
 );
 };
