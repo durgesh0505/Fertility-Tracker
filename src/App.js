@@ -2066,70 +2066,85 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logUserEvent }) =
     'Fatigue', 'Acne', 'Back Pain', 'Nausea', 'Food Cravings'
   ];
 
-  const addPeriod = async () => {
-    if (!newPeriod.startDate) {
-      alert('Please enter a start date');
-      return;
-    }
+	const addPeriod = async () => {
+	  if (!newPeriod.startDate) {
+		alert('Please enter a start date');
+		return;
+	  }
 
-    setLoading(true);
-    try {
-      const startDateStr = newPeriod.startDate;
-      let endDateStr = newPeriod.endDate;
-      let periodLength = user?.typical_period_length || 5;
+	  setLoading(true);
+	  try {
+		const startDateStr = newPeriod.startDate;
+		let endDateStr = newPeriod.endDate;
+		let periodLength = user?.typical_period_length || 5;
 
-      if (newPeriod.endDate) {
-        const start = new Date(newPeriod.startDate + 'T00:00:00');
-        const end = new Date(newPeriod.endDate + 'T00:00:00');
-        periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
-      } else {
-        const start = new Date(newPeriod.startDate + 'T00:00:00');
-        const end = new Date(start);
-        end.setDate(start.getDate() + periodLength - 1);
-        endDateStr = end.toISOString().split('T')[0];
-      }
+		if (newPeriod.endDate) {
+		  const start = new Date(newPeriod.startDate + 'T00:00:00');
+		  const end = new Date(newPeriod.endDate + 'T00:00:00');
+		  periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
+		} else {
+		  const start = new Date(newPeriod.startDate + 'T00:00:00');
+		  const end = new Date(start);
+		  end.setDate(start.getDate() + periodLength - 1);
+		  endDateStr = end.toISOString().split('T')[0];
+		}
 
-      const cycleData = {
-        user_id: user.id,
-        start_date: startDateStr,
-        end_date: endDateStr,
-        period_length: periodLength,
-        cycle_length: user?.typical_cycle_length || 28,
-        flow: newPeriod.flow,
-        symptoms: newPeriod.symptoms || [],
-        notes: newPeriod.notes || ''
-      };
+		// ✅ CALCULATE ACTUAL CYCLE LENGTH
+		let actualCycleLength = user?.typical_cycle_length || 28; // Default fallback
+		
+		if (cycles.length > 0) {
+		  // Calculate days between this period start and the last period start
+		  const currentPeriodStart = new Date(newPeriod.startDate + 'T00:00:00');
+		  const lastPeriodStart = new Date(cycles[0].start_date + 'T00:00:00');
+		  actualCycleLength = Math.ceil((currentPeriodStart - lastPeriodStart) / (24 * 60 * 60 * 1000));
+		  
+		  // Validate cycle length (should be between 15-45 days)
+		  if (actualCycleLength < 15 || actualCycleLength > 45) {
+			actualCycleLength = user?.typical_cycle_length || 28;
+		  }
+		}
 
-      const { data, error } = await supabase
-        .from('cycles')
-        .insert([cycleData])
-        .select();
+		const cycleData = {
+		  user_id: user.id,
+		  start_date: startDateStr,
+		  end_date: endDateStr,
+		  period_length: periodLength,
+		  cycle_length: actualCycleLength, // ✅ Use calculated cycle length
+		  flow: newPeriod.flow,
+		  symptoms: newPeriod.symptoms || [],
+		  notes: newPeriod.notes || ''
+		};
 
-      if (error) throw error;
+		const { data, error } = await supabase
+		  .from('cycles')
+		  .insert([cycleData])
+		  .select();
 
-      await fetchCycles();
-      await logUserEvent('period_added', 'cycle', {
-        start_date: newPeriod.startDate,
-        flow: newPeriod.flow,
-        symptoms_count: newPeriod.symptoms.length
-      });
+		if (error) throw error;
 
-      setNewPeriod({
-        startDate: '',
-        endDate: '',
-        flow: 'medium',
-        symptoms: [],
-        notes: ''
-      });
+		await fetchCycles();
+		await logUserEvent('period_added', 'cycle', {
+		  start_date: newPeriod.startDate,
+		  flow: newPeriod.flow,
+		  symptoms_count: newPeriod.symptoms.length
+		});
 
-      alert('Period added successfully!');
-    } catch (error) {
-      console.error('Error adding period:', error);
-      alert(`Error adding period: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+		setNewPeriod({
+		  startDate: '',
+		  endDate: '',
+		  flow: 'medium',
+		  symptoms: [],
+		  notes: ''
+		});
+
+		alert('Period added successfully!');
+	  } catch (error) {
+		console.error('Error adding period:', error);
+		alert(`Error adding period: ${error.message}`);
+	  } finally {
+		setLoading(false);
+	  }
+	};
 
   const deletePeriod = async (id) => {
     try {
@@ -2172,61 +2187,82 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logUserEvent }) =
     });
   };
 
-  const updatePeriod = async () => {
-    if (!editFormData.startDate) {
-      alert('Please enter a start date');
-      return;
-    }
+	const updatePeriod = async () => {
+	  if (!editFormData.startDate) {
+		alert('Please enter a start date');
+		return;
+	  }
 
-    setLoading(true);
-    try {
-      const startDateStr = editFormData.startDate;
-      let endDateStr = editFormData.endDate;
-      let periodLength = user?.typical_period_length || 5;
+	  setLoading(true);
+	  try {
+		const startDateStr = editFormData.startDate;
+		let endDateStr = editFormData.endDate;
+		let periodLength = user?.typical_period_length || 5;
 
-      if (editFormData.endDate) {
-        const start = new Date(editFormData.startDate + 'T00:00:00');
-        const end = new Date(editFormData.endDate + 'T00:00:00');
-        periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
-      } else {
-        const start = new Date(editFormData.startDate + 'T00:00:00');
-        const end = new Date(start);
-        end.setDate(start.getDate() + periodLength - 1);
-        endDateStr = end.toISOString().split('T')[0];
-      }
+		if (editFormData.endDate) {
+		  const start = new Date(editFormData.startDate + 'T00:00:00');
+		  const end = new Date(editFormData.endDate + 'T00:00:00');
+		  periodLength = Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1;
+		} else {
+		  const start = new Date(editFormData.startDate + 'T00:00:00');
+		  const end = new Date(start);
+		  end.setDate(start.getDate() + periodLength - 1);
+		  endDateStr = end.toISOString().split('T')[0];
+		}
 
-      const updateData = {
-        start_date: startDateStr,
-        end_date: endDateStr,
-        period_length: periodLength,
-        flow: editFormData.flow,
-        symptoms: editFormData.symptoms || [],
-        notes: editFormData.notes || ''
-      };
+		// ✅ CALCULATE ACTUAL CYCLE LENGTH FOR EDIT
+		let actualCycleLength = editingCycle.cycle_length; // Keep existing if no calculation needed
+		
+		// Find the previous period (chronologically before this one)
+		const editingDate = new Date(editFormData.startDate + 'T00:00:00');
+		const previousPeriod = cycles.find(cycle => {
+		  const cycleDate = new Date(cycle.start_date + 'T00:00:00');
+		  return cycle.id !== editingCycle.id && cycleDate < editingDate;
+		});
+		
+		if (previousPeriod) {
+		  const previousDate = new Date(previousPeriod.start_date + 'T00:00:00');
+		  actualCycleLength = Math.ceil((editingDate - previousDate) / (24 * 60 * 60 * 1000));
+		  
+		  // Validate cycle length
+		  if (actualCycleLength < 15 || actualCycleLength > 45) {
+			actualCycleLength = user?.typical_cycle_length || 28;
+		  }
+		}
 
-      const { error } = await supabase
-        .from('cycles')
-        .update(updateData)
-        .eq('id', editingCycle.id);
+		const updateData = {
+		  start_date: startDateStr,
+		  end_date: endDateStr,
+		  period_length: periodLength,
+		  cycle_length: actualCycleLength, // ✅ Use calculated cycle length
+		  flow: editFormData.flow,
+		  symptoms: editFormData.symptoms || [],
+		  notes: editFormData.notes || ''
+		};
 
-      if (error) throw error;
+		const { error } = await supabase
+		  .from('cycles')
+		  .update(updateData)
+		  .eq('id', editingCycle.id);
 
-      await fetchCycles();
-      await logUserEvent('period_updated', 'cycle', {
-        cycle_id: editingCycle.id,
-        start_date: editFormData.startDate,
-        flow: editFormData.flow
-      });
+		if (error) throw error;
 
-      closeEditModal();
-      alert('Period updated successfully!');
-    } catch (error) {
-      console.error('Error updating period:', error);
-      alert(`Error updating period: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+		await fetchCycles();
+		await logUserEvent('period_updated', 'cycle', {
+		  cycle_id: editingCycle.id,
+		  start_date: editFormData.startDate,
+		  flow: editFormData.flow
+		});
+
+		closeEditModal();
+		alert('Period updated successfully!');
+	  } catch (error) {
+		console.error('Error updating period:', error);
+		alert(`Error updating period: ${error.message}`);
+	  } finally {
+		setLoading(false);
+	  }
+	};
 
   const toggleSymptom = (symptom) => {
     setNewPeriod(prev => ({
