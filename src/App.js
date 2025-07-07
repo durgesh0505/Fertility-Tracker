@@ -768,7 +768,6 @@ const PasswordChangeModal = ({ user, setUser, onClose, logUserEvent }) => {
 
 const MainApp = ({ user, setUser, logUserEvent, activeTab, setActiveTab, session }) => {
   const [cycles, setCycles] = useState([]);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { isDarkMode, toggleDarkMode } = useTheme();
 
   useEffect(() => {
@@ -1009,14 +1008,6 @@ ${cycles.slice(0, 10).map(cycle =>
                   <span className="hidden sm:inline">Logout</span>
                 </button>
               </div>
-
-              {/* Mobile Menu Button */}
-              <button
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
-              >
-                <Smartphone size={20} />
-              </button>
             </div>
           </div>
         </div>
@@ -1024,34 +1015,33 @@ ${cycles.slice(0, 10).map(cycle =>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col lg:flex-row gap-8">
-          {/* Mobile Navigation */}
-          <div className={`lg:hidden ${isMobileMenuOpen ? 'block' : 'hidden'} mb-6`}>
-            <nav className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {tabs.map(tab => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => {
-                        setActiveTab(tab.id);
-                        setIsMobileMenuOpen(false);
-                        logUserEvent('tab_changed', 'navigation', { tab: tab.id });
-                      }}
-                      className={`flex flex-col items-center space-y-1 px-3 py-3 rounded-lg text-center transition-colors ${
-                        activeTab === tab.id
-                          ? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
-                          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      <Icon size={20} />
-                      <span className="text-xs font-medium">{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </nav>
-          </div>
+			{/* Mobile Navigation - Always Visible */}
+			<div className="lg:hidden mb-6">
+			  <nav className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border dark:border-gray-700 p-4">
+				<div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+				  {tabs.map(tab => {
+					const Icon = tab.icon;
+					return (
+					  <button
+						key={tab.id}
+						onClick={() => {
+						  setActiveTab(tab.id);
+						  logUserEvent('tab_changed', 'navigation', { tab: tab.id });
+						}}
+						className={`flex flex-col items-center space-y-1 px-3 py-3 rounded-lg text-center transition-colors ${
+						  activeTab === tab.id
+							? 'bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-300 border border-pink-200 dark:border-pink-700'
+							: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+						}`}
+					  >
+						<Icon size={20} />
+						<span className="text-xs font-medium">{tab.label}</span>
+					  </button>
+					);
+				  })}
+				</div>
+			  </nav>
+			</div>
 
           {/* Desktop Sidebar */}
           <div className="hidden lg:block lg:w-64">
@@ -2618,7 +2608,7 @@ const PeriodTracker = ({ user, cycles, setCycles, fetchCycles, logUserEvent }) =
   );
 };
 
-// Enhanced Pregnancy Planner
+// Enhanced Pregnancy Planner with Dynamic Cycle Data
 const PregnancyPlanner = ({ user, cycles }) => {
   const [targetMonth, setTargetMonth] = useState('5');
   const [targetYear, setTargetYear] = useState('2026');
@@ -2631,38 +2621,82 @@ const PregnancyPlanner = ({ user, cycles }) => {
     const conceptionDate = new Date(targetDelivery);
     conceptionDate.setDate(targetDelivery.getDate() - pregnancyDuration);
 
-    const lastPeriod = new Date(cycles[0].start_date);
-    const typicalCycleLength = user?.typical_cycle_length || 28;
+    // ✅ CALCULATE ACTUAL AVERAGE CYCLE LENGTH FROM HISTORY
+    let avgCycleLength = user?.typical_cycle_length || 28; // fallback
+    
+    if (cycles.length >= 2) {
+      const cycleLengths = [];
+      
+      // Calculate actual cycle lengths from period history
+      for (let i = 0; i < Math.min(cycles.length - 1, 6); i++) { // Use last 6 cycles
+        const current = new Date(cycles[i].start_date + 'T00:00:00');
+        const next = new Date(cycles[i + 1].start_date + 'T00:00:00');
+        const length = Math.ceil((current - next) / (24 * 60 * 60 * 1000));
+        
+        if (length >= 15 && length <= 45) { // Valid cycle length
+          cycleLengths.push(length);
+        }
+      }
+      
+      if (cycleLengths.length > 0) {
+        avgCycleLength = Math.round(cycleLengths.reduce((a, b) => a + b, 0) / cycleLengths.length);
+      }
+    }
+
+    // ✅ CALCULATE ACTUAL AVERAGE PERIOD LENGTH FROM HISTORY
+    let avgPeriodLength = user?.typical_period_length || 5; // fallback
+    
+    const periodLengths = cycles
+      .filter(cycle => cycle.period_length && cycle.period_length >= 2 && cycle.period_length <= 10)
+      .map(cycle => cycle.period_length);
+      
+    if (periodLengths.length > 0) {
+      avgPeriodLength = Math.round(periodLengths.reduce((a, b) => a + b, 0) / periodLengths.length);
+    }
+
+    const lastPeriod = new Date(cycles[0].start_date + 'T00:00:00');
 
     let cycleNumber = 1;
     let cycleStart = new Date(lastPeriod);
 
+    // Calculate which cycle the conception should happen in
     while (cycleStart < conceptionDate) {
-      cycleStart.setDate(cycleStart.getDate() + typicalCycleLength);
+      cycleStart.setDate(cycleStart.getDate() + avgCycleLength);
       cycleNumber++;
     }
 
     cycleNumber--;
-    cycleStart.setDate(cycleStart.getDate() - typicalCycleLength);
+    cycleStart.setDate(cycleStart.getDate() - avgCycleLength);
 
+    // Calculate ovulation (typically 14 days before next period)
     const ovulationDay = new Date(cycleStart);
-    ovulationDay.setDate(cycleStart.getDate() + 14);
+    ovulationDay.setDate(cycleStart.getDate() + avgCycleLength - 14);
 
+    // Calculate fertile window (5 days before ovulation + ovulation day)
     const fertileStart = new Date(ovulationDay);
     fertileStart.setDate(ovulationDay.getDate() - 5);
 
     const fertileEnd = new Date(ovulationDay);
     fertileEnd.setDate(ovulationDay.getDate() + 1);
 
+    // Calculate period end date
+    const periodEnd = new Date(cycleStart);
+    periodEnd.setDate(cycleStart.getDate() + avgPeriodLength - 1);
+
     return {
       targetDelivery: targetDelivery.toDateString(),
       optimalConceptionDate: conceptionDate.toDateString(),
       cycleNumber,
       periodStart: cycleStart.toDateString(),
+      periodEnd: periodEnd.toDateString(),
       fertileWindowStart: fertileStart.toDateString(),
       fertileWindowEnd: fertileEnd.toDateString(),
       ovulationDate: ovulationDay.toDateString(),
-      daysFromNow: Math.ceil((conceptionDate - new Date()) / (1000 * 60 * 60 * 24))
+      daysFromNow: Math.ceil((conceptionDate - new Date()) / (1000 * 60 * 60 * 24)),
+      // ✅ Include calculated averages for display
+      avgCycleLength,
+      avgPeriodLength,
+      basedOnCycles: Math.min(cycles.length - 1, 6)
     };
   };
 
@@ -2677,6 +2711,12 @@ const PregnancyPlanner = ({ user, cycles }) => {
       <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl p-6">
         <h2 className="text-2xl font-bold mb-2">Pregnancy Planning</h2>
         <p className="opacity-90">Plan your perfect timing for conception and delivery</p>
+        {/* ✅ Show data source info */}
+        {cycles.length > 1 && (
+          <p className="text-sm opacity-75 mt-2">
+            📊 Based on your last {Math.min(cycles.length - 1, 6)} cycles of actual data
+          </p>
+        )}
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border dark:border-gray-700">
@@ -2707,7 +2747,7 @@ const PregnancyPlanner = ({ user, cycles }) => {
               onChange={(e) => setTargetYear(e.target.value)}
               className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
-              {[2025, 2026, 2027, 2028, 2029, 2050].map(year => (
+              {[2025, 2026, 2027, 2028, 2029, 2030].map(year => (
                 <option key={year} value={year}>{year}</option>
               ))}
             </select>
@@ -2718,8 +2758,33 @@ const PregnancyPlanner = ({ user, cycles }) => {
           <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-6 border dark:border-blue-700">
             <h4 className="font-semibold text-gray-800 dark:text-white mb-4 flex items-center">
               <Baby className="text-blue-500 mr-2" size={20} />
-              Your Pregnancy Timeline
+              Your Personalized Pregnancy Timeline
             </h4>
+
+            {/* ✅ Show calculation basis */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-6 border dark:border-gray-600">
+              <h5 className="font-medium text-gray-800 dark:text-white mb-2">📊 Calculations Based On Your Data:</h5>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Avg Cycle:</span>
+                  <p className="font-medium text-gray-800 dark:text-white">{calculation.avgCycleLength} days</p>
+                </div>
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Avg Period:</span>
+                  <p className="font-medium text-gray-800 dark:text-white">{calculation.avgPeriodLength} days</p>
+                </div>
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Data From:</span>
+                  <p className="font-medium text-gray-800 dark:text-white">{calculation.basedOnCycles} cycles</p>
+                </div>
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Accuracy:</span>
+                  <p className="font-medium text-green-600 dark:text-green-400">
+                    {calculation.basedOnCycles >= 3 ? 'High' : calculation.basedOnCycles >= 1 ? 'Medium' : 'Low'}
+                  </p>
+                </div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
@@ -2754,18 +2819,18 @@ const PregnancyPlanner = ({ user, cycles }) => {
                   <div>
                     <p className="font-medium text-gray-800 dark:text-white">Cycle #{calculation.cycleNumber}</p>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Period starts: {calculation.periodStart}
+                      Period: {calculation.periodStart} to {calculation.periodEnd}
                     </p>
                   </div>
                 </div>
 
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border dark:border-gray-600">
-                  <p className="font-medium text-gray-800 dark:text-white mb-2">Best Conception Window:</p>
+                  <p className="font-medium text-gray-800 dark:text-white mb-2">🎯 Best Conception Window:</p>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
                     <strong>Fertile Window:</strong> {calculation.fertileWindowStart} to {calculation.fertileWindowEnd}
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    <strong>Ovulation:</strong> {calculation.ovulationDate}
+                    <strong>Peak Ovulation:</strong> {calculation.ovulationDate}
                   </p>
                 </div>
               </div>
@@ -2773,8 +2838,9 @@ const PregnancyPlanner = ({ user, cycles }) => {
 
             <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg">
               <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                <strong>💡 Tip:</strong> Start taking folic acid supplements at least one month before conception. 
-                Track your basal body temperature and cervical mucus for more accurate timing.
+                <strong>💡 Personalized Tip:</strong> Based on your {calculation.avgCycleLength}-day cycle pattern, 
+                start taking folic acid supplements now. Track your basal body temperature starting 2 cycles before 
+                your target conception cycle for maximum accuracy.
               </p>
             </div>
           </div>
@@ -2783,7 +2849,7 @@ const PregnancyPlanner = ({ user, cycles }) => {
             <Calendar className="mx-auto text-gray-300 dark:text-gray-500 mb-4" size={48} />
             <h4 className="font-medium text-gray-600 dark:text-gray-400 mb-2">Need More Cycle Data</h4>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Please add some period data first to calculate your optimal conception timing.
+              Please add at least 2 periods to calculate your personalized conception timing based on your actual cycle patterns.
             </p>
           </div>
         )}
